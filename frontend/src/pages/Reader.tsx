@@ -24,6 +24,7 @@ export default function Reader() {
   // 翻译状态（轮询）
   const [translationStatus, setTranslationStatus] = useState<string>("pending");
   const [translationError, setTranslationError] = useState<string | null>(null);
+  const [translationProgress, setTranslationProgress] = useState<number | null>(null);
 
   // 共享阅读状态：模式切换不丢失
   const [mode, setMode] = useState<Mode>("overlay");
@@ -47,6 +48,7 @@ export default function Reader() {
         setPaper(detail);
         setTranslationStatus(detail.translation_status);
         setTranslationError(detail.translation_error);
+        setTranslationProgress(null);
         let initMode: Mode = isMobile ? "bilingual" : "overlay";
         let initPage = 1;
         try {
@@ -84,19 +86,25 @@ export default function Reader() {
     return () => clearTimeout(timer);
   }, [paperId, paper, mode, page]);
 
-  // 翻译状态轮询：未完成时每 5s 查一次
+  // 翻译状态轮询：running 时 2s（进度条丝滑），其余 5s；done/failed 停止
   useEffect(() => {
     if (translationStatus === "done" || translationStatus === "failed") return;
     let active = true;
+    // 用 ref 让轮询循环读到最新状态，决定下一次间隔
+    const statusRef = { current: translationStatus };
     const poll = async () => {
       while (active) {
-        await new Promise((r) => setTimeout(r, 5000));
+        // running 加快到 2s，其它 5s
+        const interval = statusRef.current === "running" ? 2000 : 5000;
+        await new Promise((r) => setTimeout(r, interval));
         if (!active) break;
         try {
           const st = await api.translationStatus(paperId);
           if (!active) break;
           setTranslationStatus(st.status);
           setTranslationError(st.error);
+          setTranslationProgress(st.progress ?? null);
+          statusRef.current = st.status;
           if (st.status === "done" || st.status === "failed") break;
         } catch {
           break;
@@ -114,6 +122,7 @@ export default function Reader() {
       const st = await api.retryTranslate(paperId);
       setTranslationStatus(st.status);
       setTranslationError(null);
+      setTranslationProgress(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "触发翻译失败");
     }
@@ -154,6 +163,7 @@ export default function Reader() {
         scale={scale}
         onScaleChange={setScale}
         translationStatus={translationStatus}
+        translationProgress={translationProgress}
         onRetryTranslate={handleRetryTranslate}
         onBack={() => navigate("/")}
       />
@@ -172,6 +182,7 @@ export default function Reader() {
             translatedFileUrl={api.translatedFileUrl(paperId)}
             translationStatus={translationStatus}
             translationError={translationError}
+            translationProgress={translationProgress}
             page={page}
             scale={scale}
           />
@@ -194,6 +205,7 @@ function Toolbar(props: {
   scale: number;
   onScaleChange: (s: number) => void;
   translationStatus: string;
+  translationProgress?: number | null;
   onRetryTranslate: () => void;
   onBack: () => void;
 }) {
@@ -207,6 +219,7 @@ function Toolbar(props: {
     scale,
     onScaleChange,
     translationStatus,
+    translationProgress,
     onRetryTranslate,
     onBack,
   } = props;
@@ -215,7 +228,9 @@ function Toolbar(props: {
     translationStatus === "done"
       ? "译文就绪"
       : translationStatus === "running"
-      ? "翻译中…"
+      ? typeof translationProgress === "number"
+        ? `翻译中 ${Math.round(translationProgress)}%`
+        : "翻译中…"
       : translationStatus === "failed"
       ? "翻译失败"
       : "等待翻译";

@@ -48,6 +48,13 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* 翻译进度条：indeterminate 模式（pdf2zh 暂未上报精确进度时的兜底动画） */
+@keyframes indeterminate {
+  0% { left: -40%; width: 40%; }
+  50% { left: 30%; width: 50%; }
+  100% { left: 100%; width: 40%; }
+}
+
 /* pdf.js TextLayer：透明文本，选中时高亮 */
 .textLayer {
   position: absolute;

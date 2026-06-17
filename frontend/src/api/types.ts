@@ -23,4 +23,6 @@ export interface TranslationStatusOut {
   paper_id: number;
   status: string; // pending / running / done / failed
   error: string | null;
+  // 翻译进度 0-100，仅 status=running 且 pdf2zh 可达时才有值；否则 null
+  progress?: number | null;
 }

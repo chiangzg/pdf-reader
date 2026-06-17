@@ -34,6 +34,16 @@ def on_startup() -> None:
     """开发环境自动建表；生产环境建议用 alembic 迁移。"""
     Base.metadata.create_all(bind=engine)
     logger.info("数据库表已就绪")
+    # 恢复孤儿翻译任务：daemon 线程随上一进程退出而消失，DB 里 status='running'
+    # 的记录其实已没人处理，重置为 pending 并重新提交。
+    from app.database import SessionLocal
+    from app.routers.papers import resume_pending_translations
+
+    db = SessionLocal()
+    try:
+        resume_pending_translations(db)
+    finally:
+        db.close()
 
 
 @app.get("/health", tags=["meta"])

@@ -6,6 +6,7 @@ interface Props {
   translatedFileUrl: string; // 译文 PDF（mono，纯中文版面）
   translationStatus: string; // pending / running / done / failed
   translationError?: string | null;
+  translationProgress?: number | null; // 0-100，running 时有值；null=暂未上报
   page: number; // 当前页（1-based，与原版面模式共享）
   scale: number;
 }
@@ -14,7 +15,10 @@ interface Props {
  * 双语对照：左侧原始 PDF（英文，保留原版面），右侧译文 PDF（中文，由 pdf2zh 生成，
  * 完整保留公式/图表/版面）。两列都用 PdfCanvas 渲染，均带 TextLayer 可划词。
  *
- * 翻译未完成时右侧显示「翻译中…」占位；翻译失败显示错误 + 重试提示。
+ * 翻译未完成时右侧显示翻译进度占位：
+ *  - 有精确进度（0-100）：百分比 + 确定进度条
+ *  - 无精确进度（null）：indeterminate 动画条（pdf2zh 排队/启动中）
+ * 翻译失败显示错误 + 重试提示。
  * PC 左右并排；移动端上下叠放。
  */
 export default function BilingualView({
@@ -22,6 +26,7 @@ export default function BilingualView({
   translatedFileUrl,
   translationStatus,
   translationError,
+  translationProgress,
   page,
   scale,
 }: Props) {
@@ -43,12 +48,16 @@ export default function BilingualView({
         <PdfCanvas fileUrl={fileUrl} page={page} scale={scale} />
       </div>
 
-      {/* 右侧：译文 PDF 或占位 */}
+      {/* 右侧：译文 PDF 或进度占位 */}
       <div style={{ flex: "0 0 auto", display: "flex", justifyContent: "center" }}>
         {translatedReady ? (
           <PdfCanvas fileUrl={translatedFileUrl} page={page} scale={scale} />
         ) : (
-          <TranslationPlaceholder status={translationStatus} error={translationError} />
+          <TranslationPlaceholder
+            status={translationStatus}
+            error={translationError}
+            progress={translationProgress}
+          />
         )}
       </div>
     </div>
@@ -58,18 +67,22 @@ export default function BilingualView({
 function TranslationPlaceholder({
   status,
   error,
+  progress,
 }: {
   status: string;
   error?: string | null;
+  progress?: number | null;
 }) {
   let title = "翻译中…";
-  let desc = "正在生成保留公式与版面的中文 PDF，约需 1-3 分钟";
+  let desc = "正在生成保留公式与版面的中文 PDF，约需数分钟";
   if (status === "failed") {
     title = "翻译失败";
     desc = error || "翻译过程中出错，可点击工具栏「重新翻译」重试";
   } else if (status === "pending") {
     title = "等待翻译…";
     desc = "翻译任务已排队";
+  } else if (status === "running" && typeof progress === "number") {
+    title = `翻译中… ${Math.round(progress)}%`;
   }
   return (
     <div
@@ -80,7 +93,7 @@ function TranslationPlaceholder({
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        gap: 10,
+        gap: 12,
         border: "2px dashed var(--border)",
         borderRadius: 12,
         background: "#fff",
@@ -89,11 +102,56 @@ function TranslationPlaceholder({
         textAlign: "center",
       }}
     >
-      {status !== "failed" && <Spinner />}
+      {status !== "failed" && (
+        <ProgressBar status={status} progress={progress} />
+      )}
       <div style={{ fontWeight: 600, fontSize: 15, color: "var(--fg)" }}>{title}</div>
       <div style={{ fontSize: 13, lineHeight: 1.6 }}>{desc}</div>
     </div>
   );
+}
+
+/**
+ * 进度条：
+ *  - running + 有 progress：确定进度条（灰底 + 主色填充，CSS transition 平滑）
+ *  - running/pending + 无 progress：indeterminate 动画条（兜底，pdf2zh 排队/启动中）
+ *  - failed：不渲染
+ */
+function ProgressBar({
+  status,
+  progress,
+}: {
+  status: string;
+  progress?: number | null;
+}) {
+  // 确定进度：running 且有精确百分比
+  if (status === "running" && typeof progress === "number") {
+    const pct = Math.max(0, Math.min(100, progress));
+    return (
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 240,
+          height: 6,
+          background: "var(--border)",
+          borderRadius: 3,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: `${pct}%`,
+            height: "100%",
+            background: "var(--primary)",
+            borderRadius: 3,
+            transition: "width .4s ease",
+          }}
+        />
+      </div>
+    );
+  }
+  // indeterminate 兜底：用现有 Spinner，语义一致（不确定等待）
+  return <Spinner />;
 }
 
 function Spinner() {

@@ -124,13 +124,42 @@ def _translation_task(paper_id: int, source_hash: str, storage_path: str) -> Non
 
 
 def _trigger_translation(paper_id: int, source_hash: str, storage_path: str) -> None:
-    """启动后台翻译线程。"""
+    """启动后台翻译线程。
+
+    供上传、手动重试、以及进程重启后的孤儿任务恢复复用。
+    """
     t = threading.Thread(
         target=_translation_task,
         args=(paper_id, source_hash, storage_path),
         daemon=True,
     )
     t.start()
+
+
+def resume_pending_translations(db: Session) -> int:
+    """进程启动后恢复孤儿翻译任务。
+
+    daemon 线程随进程退出而消失，DB 里可能残留 translation_status='running' 的记录
+    （其实已没人处理）。把它们重置为 pending 并重新提交翻译。
+
+    在 main.py 的 startup 钩子调用。返回恢复的任务数。
+    """
+    orphans = db.execute(
+        select(Paper).where(Paper.translation_status == "running")
+    ).scalars().all()
+    count = 0
+    for paper in orphans:
+        if not paper.storage_path:
+            continue
+        logger.info("恢复孤儿翻译任务: paper_id=%s hash=%s", paper.id, paper.source_hash)
+        paper.translation_status = "pending"
+        paper.translation_error = None
+        db.commit()
+        _trigger_translation(paper.id, paper.source_hash, paper.storage_path)
+        count += 1
+    if count:
+        logger.info("共恢复 %d 个孤儿翻译任务", count)
+    return count
 
 
 @router.post("", response_model=PaperDetail, status_code=status.HTTP_201_CREATED)
@@ -201,10 +230,19 @@ def get_translation_status(paper_id: int, db: Session = Depends(get_db)):
     paper = db.get(Paper, paper_id)
     if paper is None:
         raise HTTPException(status_code=404, detail="论文不存在")
+    progress = None
+    # 仅 running 时现查 pdf2zh 任务进度（source_hash 即 task_id）。
+    # pdf2zh 不可达时 get_task_status 返回 None，progress 保持 None，不报错。
+    if paper.translation_status == "running":
+        client = _get_pdf2zh()
+        status = client.get_task_status(paper.source_hash)
+        if status and isinstance(status.get("progress"), (int, float)):
+            progress = float(status["progress"])
     return TranslationStatusOut(
         paper_id=paper_id,
         status=paper.translation_status,
         error=paper.translation_error,
+        progress=progress,
     )
 
 

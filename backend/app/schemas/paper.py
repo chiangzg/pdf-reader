@@ -30,3 +30,6 @@ class TranslationStatusOut(BaseModel):
     paper_id: int
     status: str  # pending / running / done / failed
     error: str | None = None
+    # 翻译进度 0-100，仅 status=running 且 pdf2zh 可达时才有值；否则 None。
+    # 现查 pdf2zh 任务状态，不落库（临时数据，零迁移）。
+    progress: float | None = None

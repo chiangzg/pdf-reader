@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     pdf2zh_url: str = Field(default="http://pdf2zh:7860", description="pdf2zh FastAPI 翻译服务地址")
     pdf2zh_lang_in: str = Field(default="en")
     pdf2zh_lang_out: str = Field(default="zh")
+    # 后台轮询翻译任务状态的间隔（秒）。每次轮询是秒级短连接，不再有覆盖整个
+    # 翻译时长的长连接超时，故此值只影响进度刷新频率，不影响超时容忍度。
+    pdf2zh_poll_interval: float = Field(default=3.0)
     # 翻译引擎：值必须等于 translator.name（小写）。
     # 用 "openai" 而非 "deepseek"：pdf2zh 的 DeepSeek 翻译器继承 OpenAI 时行为不稳定，
     # 用 openai 翻译器 + DeepSeek OpenAI 兼容端点（base_url）更可靠。
