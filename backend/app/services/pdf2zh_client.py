@@ -1,22 +1,22 @@
 """pdf2zh 翻译服务客户端。
 
-通过 gradio_client 调用独立的 pdf2zh Gradio 服务（byaidu/pdf2zh 镜像），
+通过 HTTP 调用 pdf2zh 容器内自定义的 FastAPI 翻译服务（server.py），
 生成保留公式/图表/版面的译文 PDF。
 
-pdf2zh 的 /translate_file 端点参数（实测确认）：
-  file_type: 'File' | 'Link'
-  file_input: 文件（FileData）
-  link_input: URL（当 file_type='Link' 时）
-  service: 'DeepSeek' / 'OpenAI' / 'Google' / ...（首字母大写）
-  lang_from: 'English' / 'Simplified Chinese' / ...（完整语言名）
-  lang_to: 同上
-  page_range: 'All' / 'First' / 'First 5 pages' / 'Others'
+为什么不用 gradio_client 调 pdf2zh 的 Gradio GUI：
+  pdf2zh 自带的 Gradio /translate_file 端点是给浏览器交互设计的，其 *envs
+  （翻译器环境变量）经 Gradio 序列化 + special_args 注入后极为脆弱——API 调用者
+  被迫为 progress 槽传值，该值会被 gradio 挤进 *envs[0]，导致真实 envs 整体后移、
+  base_url 被置空，openai client 报 "Request URL is missing scheme" 并静默跳过段落。
 
-返回（多个 FileData）：
-  [0] download_translation_mono  ← 我们要的纯中文 PDF
-  [1] document_preview
-  [2] download_translation_dual  ← 中英对照 PDF
-  ...
+  改为：pdf2zh 容器跑 server.py（直接调 high_level.translate），envs 以 JSON dict
+  传递，backend 用 httpx 调 POST /translate。契约见 pdf2zh/server.py。
+
+两个容器通过共享 volume 访问文件：
+  - uploads volume：源 PDF（pdf2zh 需只读挂载）
+  - translations volume：译文 PDF 输出
+路径必须用「pdf2zh 容器内」的视角传递（/app/uploads/...、/app/translations/...），
+因两容器把这些 volume 挂载到相同的 /app 路径下，路径可直接复用。
 """
 from __future__ import annotations
 
@@ -24,126 +24,132 @@ import logging
 import shutil
 from pathlib import Path
 
-from gradio_client import Client, handle_file
+import httpx
 
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
-# pdf2zh 端点名
-TRANSLATE_API = "/translate_file"
-
-# 语言名映射（我们用短码，pdf2zh 用完整名）
-LANG_MAP = {
-    "en": "English",
-    "zh": "Simplified Chinese",
-    "zh-Hant": "Traditional Chinese",
-    "ja": "Japanese",
-    "ko": "Korean",
-    "fr": "French",
-    "de": "German",
-    "ru": "Russian",
-    "es": "Spanish",
-    "it": "Italian",
-}
+# FastAPI 端点路径
+TRANSLATE_PATH = "/translate"
 
 
 class Pdf2zhClient:
-    """封装对 pdf2zh Gradio 服务的调用。"""
+    """封装对 pdf2zh FastAPI 翻译服务的 HTTP 调用。"""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._client: Client | None = None
+        # 翻译耗时较长（单篇论文 1-3 分钟），给足超时
+        self._timeout = httpx.Timeout(300.0, connect=10.0)
 
     @property
-    def client(self) -> Client:
-        """懒加载 Gradio Client。"""
-        if self._client is None:
-            logger.info("连接 pdf2zh 服务: %s", self.settings.pdf2zh_url)
-            self._client = Client(self.settings.pdf2zh_url, verbose=False)
-        return self._client
+    def base_url(self) -> str:
+        return self.settings.pdf2zh_url.rstrip("/")
 
     def translate(self, input_pdf_path: str, output_path: str) -> str:
         """调用 pdf2zh 翻译，返回译文 PDF（mono）的本地路径。
 
-        input_pdf_path: 原始 PDF 路径（本容器内可达）
-        output_path: 译文 PDF 持久化目标路径
+        input_pdf_path: 原始 PDF 路径（本容器内可达，且需在 pdf2zh 容器内也可见——
+                        因两容器共享 uploads/translations volume，路径一致）
+        output_path: 译文 PDF 持久化目标路径（本容器内）
         返回: output_path
-
-        DeepSeek API Key 通过环境变量 DEEPSEEK_API_KEY 注入 pdf2zh 服务，
-        故无需在调用时传 key（pdf2zh 内部读取）。
         """
-        c = self.client
-        lang_from = LANG_MAP.get(self.settings.pdf2zh_lang_in, self.settings.pdf2zh_lang_in)
-        lang_to = LANG_MAP.get(self.settings.pdf2zh_lang_out, self.settings.pdf2zh_lang_out)
+        envs = self._build_envs()
+        # 译文由 pdf2zh 写到 translations volume，与 backend 共享。
+        # 用源文件名作为输出子目录，避免并发翻译互相覆盖。
+        src_name = Path(input_pdf_path).stem
+        remote_output_dir = f"/app/translations/{src_name}"
+
+        payload = {
+            "input_path": input_pdf_path,
+            "output_dir": remote_output_dir,
+            "lang_in": self.settings.pdf2zh_lang_in,
+            "lang_out": self.settings.pdf2zh_lang_out,
+            "service": self.settings.pdf2zh_service,
+            "envs": envs,
+            "threads": 1,
+        }
 
         logger.info(
-            "触发 pdf2zh 翻译: %s -> %s (service=%s %s->%s)",
+            "触发 pdf2zh 翻译: %s -> %s (service=%s %s->%s, envs=%s)",
             input_pdf_path,
             output_path,
             self.settings.pdf2zh_service,
-            lang_from,
-            lang_to,
+            self.settings.pdf2zh_lang_in,
+            self.settings.pdf2zh_lang_out,
+            _mask_envs(envs),
         )
 
-        result = c.predict(
-            api_name=TRANSLATE_API,
-            file_type="File",
-            file_input=handle_file(input_pdf_path),
-            link_input="",
-            service=self.settings.pdf2zh_service,
-            lang_from=lang_from,
-            lang_to=lang_to,
-            page_range="All",
-            page_input="",
-            prompt="",
-            threads="",
-            skip_subset_fonts=False,
-            ignore_cache=False,
-            vfont="",
-            use_babeldoc=True,
-            recaptcha_response="",
-            progress="",
-            param_17="",
-            param_18="",
-            param_19="",
-        )
+        url = f"{self.base_url}{TRANSLATE_PATH}"
+        try:
+            resp = httpx.post(url, json=payload, timeout=self._timeout)
+        except httpx.RequestError as e:
+            raise RuntimeError(f"无法连接 pdf2zh 翻译服务 ({url}): {e}") from e
 
-        # 从返回值提取 mono PDF（第一个文件）
-        mono_path = _extract_mono_path(result)
-        if mono_path is None:
-            raise RuntimeError(f"pdf2zh 返回结果无法解析为文件路径: {_truncate(str(result))}")
+        if resp.status_code != 200:
+            detail = _safe_detail(resp)
+            raise RuntimeError(f"pdf2zh 翻译失败 (HTTP {resp.status_code}): {detail}")
 
-        # 复制到持久化目录
+        data = resp.json()
+        mono_remote = data.get("mono_path")
+        if not mono_remote:
+            raise RuntimeError(f"pdf2zh 返回缺少 mono_path: {data}")
+
+        # translations volume 共享：pdf2zh 写入的 mono 文件路径在 backend 同路径可读。
+        # 但 backend 期望输出到指定的 output_path，故复制过去。
+        if not Path(mono_remote).exists():
+            raise RuntimeError(f"译文文件未出现在共享 volume: {mono_remote}")
+
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(mono_path, output_path)
+        shutil.copy(mono_remote, output_path)
         logger.info("译文 PDF 已保存: %s", output_path)
         return output_path
 
+    def _build_envs(self) -> dict[str, str]:
+        """按所选翻译器构造环境变量 dict。
 
-def _extract_mono_path(result) -> str | None:
-    """从 /translate_file 返回值提取 mono PDF 文件路径。
+        pdf2zh 的 high_level.translate -> converter 用 envs 覆盖 os.environ 读取的值，
+        因此必须显式传入真实值，否则空值会把 base_url/api_key 置空，导致
+        openai client 报 "Request URL is missing scheme" 并静默跳过段落。
 
-    返回结构（实测）：第一个元素是 mono PDF 的 FileData。
-    FileData 可能是 dict（含 path/url）或字符串路径。
-    """
-    if isinstance(result, str):
-        return result
-    if isinstance(result, (list, tuple)) and result:
-        return _file_data_path(result[0])
-    return None
+        仅对 openai / deepseek 注入；其它引擎返回空 dict，
+        回退到 pdf2zh 内部从环境变量读取。
+        """
+        service = self.settings.pdf2zh_service
+        base_url = self.settings.openai_base_url
+        if service == "openai":
+            if not base_url or "://" not in base_url:
+                logger.error(
+                    "OPENAI_BASE_URL 非法 (%r)，翻译将因缺少 scheme 而失败。"
+                    "请检查 DEEPSEEK_BASE_URL 配置。",
+                    base_url,
+                )
+            return {
+                "OPENAI_BASE_URL": base_url,
+                "OPENAI_API_KEY": self.settings.deepseek_api_key,
+                "OPENAI_MODEL": self.settings.deepseek_model,
+            }
+        if service == "deepseek":
+            return {
+                "DEEPSEEK_API_KEY": self.settings.deepseek_api_key,
+                "DEEPSEEK_MODEL": self.settings.deepseek_model,
+            }
+        return {}
 
 
-def _file_data_path(item) -> str | None:
-    """从单个 FileData 项提取 path。"""
-    if isinstance(item, str):
-        return item
-    if isinstance(item, dict):
-        return item.get("path") or item.get("url")
-    if isinstance(item, (list, tuple)) and item:
-        return _file_data_path(item[0])
-    return None
+def _safe_detail(resp: httpx.Response) -> str:
+    try:
+        return resp.json().get("detail", resp.text[:300])
+    except Exception:  # noqa: BLE001
+        return resp.text[:300]
 
 
-def _truncate(s: str, n: int = 300) -> str:
-    return s if len(s) <= n else s[:n] + "..."
+def _mask_envs(envs: dict[str, str]) -> dict[str, str]:
+    """日志中隐藏 API key：对形如 sk- 开头的值只显示前 6 位 + ***。"""
+    masked: dict[str, str] = {}
+    for k, v in envs.items():
+        if isinstance(v, str) and v.startswith("sk-") and len(v) > 6:
+            masked[k] = v[:6] + "***"
+        else:
+            masked[k] = v
+    return masked

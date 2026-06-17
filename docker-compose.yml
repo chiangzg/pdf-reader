@@ -23,24 +23,28 @@ services:
     # 端口不暴露到宿主机，仅内部网络可访问
 
   # ---------------- pdf2zh 翻译服务（保留公式/图表/版面）----------------
+  # 不再使用 pdf2zh 自带的 Gradio GUI。改为自定义 FastAPI 服务（pdf2zh/server.py），
+  # 直接调用 pdf2zh.high_level.translate，envs 以 JSON 传递。
+  # 翻译所需的 base_url/api_key/model 由 backend 在每次请求时通过 JSON body 注入，
+  # 故此处无需再向容器注入 OPENAI_*/DEEPSEEK_* 环境变量。
   pdf2zh:
     build: ./pdf2zh
     # x86 兼容：doclayout ONNX 模型在 ARM 上有兼容问题，生产服务器(x86)可移除此行
     platform: linux/amd64
     restart: unless-stopped
     environment:
-      # DeepSeek 翻译引擎。pdf2zh 的 DeepSeek 翻译器继承自 OpenAI 翻译器，
-      # 需同时提供 DEEPSEEK_* 和 OPENAI_* 两组环境变量（均指向 DeepSeek API）。
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
-      OPENAI_API_KEY: ${DEEPSEEK_API_KEY}
-      OPENAI_BASE_URL: https://api.deepseek.com/v1
-      OPENAI_API_BASE: https://api.deepseek.com/v1
-      OPENAI_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
       # HuggingFace 国内镜像，加速首次模型下载
       HF_ENDPOINT: https://hf-mirror.com
     volumes:
       - translations:/app/translations
+      # 只读挂载 uploads，让 pdf2zh 能读取 backend 上传的源 PDF
+      - uploads:/app/uploads:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - internal
 

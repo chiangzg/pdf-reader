@@ -45,9 +45,12 @@ docker compose up -d --build
 
 ```
 .
-├── docker-compose.yml      # 5 服务编排
+├── docker-compose.yml      # 5 服务编排（postgres / pdf2zh / backend / frontend / proxy）
 ├── backend/                # FastAPI 后端
 ├── frontend/               # React 前端
+├── pdf2zh/                 # PDF 翻译服务（FastAPI 包装 pdf2zh.high_level，envs 用 JSON 传递）
+│   ├── Dockerfile
+│   └── server.py
 └── proxy/                  # Traefik 配置
 ```
 

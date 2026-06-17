@@ -31,12 +31,14 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
 
     # ---- pdf2zh 翻译服务 ----
-    pdf2zh_url: str = Field(default="http://pdf2zh:7860/", description="pdf2zh Gradio 服务地址")
+    # pdf2zh 容器内跑自定义 FastAPI 翻译服务（pdf2zh/server.py），不再是 Gradio GUI。
+    pdf2zh_url: str = Field(default="http://pdf2zh:7860", description="pdf2zh FastAPI 翻译服务地址")
     pdf2zh_lang_in: str = Field(default="en")
     pdf2zh_lang_out: str = Field(default="zh")
-    # 注意：用 "OpenAI" 而非 "DeepSeek"。pdf2zh 1.9.6 的 DeepSeek 翻译器有 bug
-    # （继承 OpenAI 时缺 OPENAI_MODEL envs），故用 OpenAI service + DeepSeek 端点绕过。
-    pdf2zh_service: str = Field(default="OpenAI", description="pdf2zh 使用的翻译引擎")
+    # 翻译引擎：值必须等于 translator.name（小写）。
+    # 用 "openai" 而非 "deepseek"：pdf2zh 的 DeepSeek 翻译器继承 OpenAI 时行为不稳定，
+    # 用 openai 翻译器 + DeepSeek OpenAI 兼容端点（base_url）更可靠。
+    pdf2zh_service: str = Field(default="openai", description="pdf2zh 使用的翻译引擎（translator.name，小写）")
 
     # ---- DeepSeek（interpreter.py 用于 AI 解读）----
     deepseek_api_key: str = ""
@@ -45,6 +47,15 @@ class Settings(BaseSettings):
 
     # ---- 上传 ----
     max_upload_mb: int = 50
+
+    @property
+    def openai_base_url(self) -> str:
+        """拼出供 pdf2zh OpenAI 翻译器使用的 DeepSeek OpenAI 兼容端点。
+
+        DeepSeek 的 base_url 形如 https://api.deepseek.com，
+        OpenAI 兼容端点需要 /v1 后缀。统一在此处拼装，避免多处硬编码。
+        """
+        return f"{self.deepseek_base_url.rstrip('/')}/v1"
 
     @property
     def database_url(self) -> str:
