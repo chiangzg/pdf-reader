@@ -1,0 +1,141 @@
+# =========================================================
+#  PDF 翻译阅读器 —— 一键部署
+#  docker compose up -d --build
+# =========================================================
+services:
+  # ---------------- 数据库 ----------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pdfreader}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-pdfreader}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pdfreader} -d ${POSTGRES_DB:-pdfreader}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    # 端口不暴露到宿主机，仅内部网络可访问
+
+  # ---------------- pdf2zh 翻译服务（保留公式/图表/版面）----------------
+  pdf2zh:
+    build: ./pdf2zh
+    # x86 兼容：doclayout ONNX 模型在 ARM 上有兼容问题，生产服务器(x86)可移除此行
+    platform: linux/amd64
+    restart: unless-stopped
+    environment:
+      # DeepSeek 翻译引擎。pdf2zh 的 DeepSeek 翻译器继承自 OpenAI 翻译器，
+      # 需同时提供 DEEPSEEK_* 和 OPENAI_* 两组环境变量（均指向 DeepSeek API）。
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      OPENAI_API_KEY: ${DEEPSEEK_API_KEY}
+      OPENAI_BASE_URL: https://api.deepseek.com/v1
+      OPENAI_API_BASE: https://api.deepseek.com/v1
+      OPENAI_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      # HuggingFace 国内镜像，加速首次模型下载
+      HF_ENDPOINT: https://hf-mirror.com
+    volumes:
+      - translations:/app/translations
+    networks:
+      - internal
+
+  # ---------------- 后端 ----------------
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      PDF2ZH_URL: ${PDF2ZH_URL:-http://pdf2zh:7860/}
+    volumes:
+      - uploads:/app/uploads
+      - translations:/app/translations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - internal
+    labels:
+      - "traefik.enable=true"
+      # /api/* 与 /health 路由到后端
+      - "traefik.http.routers.backend.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/api`) || PathPrefix(`/health`)"
+      - "traefik.http.routers.backend.entrypoints=websecure"
+      - "traefik.http.routers.backend.tls.certresolver=le"
+      - "traefik.http.services.backend.loadbalancer.server.port=8000"
+      - "traefik.http.routers.backend.priority=10"
+
+  # ---------------- 前端（多阶段构建：node→nginx 托管静态文件）----------------
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - internal
+    labels:
+      - "traefik.enable=true"
+      # 其余所有路径路由到前端
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=le"
+      - "traefik.http.services.frontend.loadbalancer.server.port=80"
+      # 优先级：让 backend 的 /api 优先匹配（数字越大越优先）
+      - "traefik.http.routers.frontend.priority=1"
+
+  # ---------------- 反向代理 + HTTPS ----------------
+  proxy:
+    image: traefik:v3
+    restart: unless-stopped
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=pdf-reader_internal"
+      # 入口点
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # HTTP → HTTPS 跳转
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      # Let's Encrypt ACME
+      - "--certificatesresolvers.le.acme.email=${ACME_EMAIL:-admin@example.com}"
+      - "--certificatesresolvers.le.acme.storage=/acme.json"
+      - "--certificatesresolvers.le.acme.tlschallenge=true"
+      - "--certificatesresolvers.le.acme.caserver=${ACME_CA_SERVER:-https://acme-staging-v02.api.letsencrypt.org/directory}"
+      # 仪表盘（仅内部网络访问，不对外暴露路由）
+      - "--api.dashboard=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./proxy/acme.json:/acme.json
+    networks:
+      - internal
+    labels:
+      # 启用仪表盘路由（仅本地调试，生产可关闭）
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls.certresolver=le"
+      - "traefik.http.routers.dashboard.service=api@internal"
+
+volumes:
+  pgdata:
+  uploads:
+  translations:
+
+networks:
+  internal:
+    name: pdf-reader_internal

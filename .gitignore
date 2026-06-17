@@ -1,0 +1,48 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# ===== Node =====
+node_modules/
+dist/
+build/
+.vite/
+*.local
+
+# ===== 环境与密钥 =====
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# ===== 编辑器/系统 =====
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# ===== Docker 持久化数据（本地开发时挂载，勿提交）=====
+data/
+
+# ===== 本地开发 compose override（暴露端口，勿提交）=====
+docker-compose.override.yml
+
+# ===== 上传的 PDF =====
+uploads/
+backend/uploads/
+
+# ===== Traefik 动态文件 =====
+proxy/acme.json
+proxy/acme-test.json

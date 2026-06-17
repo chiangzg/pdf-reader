@@ -1,0 +1,28 @@
+# Web 框架
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+gunicorn==23.0.0
+
+# 数据库
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+alembic==1.14.0
+
+# pdf2zh 翻译服务客户端
+gradio_client==1.5.4
+
+# PDF 元信息（页数/标题，轻量，无需 PyMuPDF）
+pypdf==5.1.0
+
+# DeepSeek（interpreter.py 用于 AI 解读）
+openai==1.58.1
+
+# 工具
+pydantic==2.10.4
+email-validator==2.2.0
+pydantic-settings==2.7.0
+python-multipart==0.0.20
+bcrypt==4.2.1
+PyJWT==2.10.1
+httpx==0.28.1
+tenacity==9.0.0
