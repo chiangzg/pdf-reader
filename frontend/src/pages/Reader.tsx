@@ -6,10 +6,11 @@ import { useDevice } from "../hooks/useDevice";
 import { useSelection } from "../hooks/useSelection";
 import PdfCanvas from "../components/PdfCanvas";
 import BilingualView from "../components/BilingualView";
+import TranslatedView from "../components/TranslatedView";
 import SelectionToolbar from "../components/SelectionToolbar";
 import InterpretPanel from "../components/InterpretPanel";
 
-type Mode = "overlay" | "bilingual";
+type Mode = "overlay" | "translated" | "bilingual";
 
 export default function Reader() {
   const { id } = useParams<{ id: string }>();
@@ -176,6 +177,15 @@ export default function Reader() {
           <div style={{ display: "flex", justifyContent: "center" }}>
             <PdfCanvas fileUrl={api.paperFileUrl(paperId)} page={page} scale={scale} />
           </div>
+        ) : mode === "translated" ? (
+          <TranslatedView
+            translatedFileUrl={api.translatedFileUrl(paperId)}
+            translationStatus={translationStatus}
+            translationError={translationError}
+            translationProgress={translationProgress}
+            page={page}
+            scale={scale}
+          />
         ) : (
           <BilingualView
             fileUrl={api.paperFileUrl(paperId)}
@@ -258,7 +268,7 @@ function Toolbar(props: {
       </strong>
 
       <div style={{ display: "flex", background: "var(--bg)", borderRadius: 8, padding: 3, border: "1px solid var(--border)" }}>
-        {(["overlay", "bilingual"] as Mode[]).map((m) => (
+        {(["overlay", "translated", "bilingual"] as Mode[]).map((m) => (
           <button
             key={m}
             onClick={() => onModeChange(m)}
@@ -268,7 +278,7 @@ function Toolbar(props: {
               color: mode === m ? "#fff" : "var(--fg)",
             }}
           >
-            {m === "overlay" ? "原版面" : "双语对照"}
+            {m === "overlay" ? "原版面" : m === "translated" ? "译文" : "双语对照"}
           </button>
         ))}
       </div>

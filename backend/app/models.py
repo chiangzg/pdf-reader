@@ -74,7 +74,7 @@ class Progress(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     paper_id: Mapped[int] = mapped_column(ForeignKey("papers.id", ondelete="CASCADE"), index=True, nullable=False)
-    mode: Mapped[str] = mapped_column(String(16), default="overlay", comment="overlay / bilingual")
+    mode: Mapped[str] = mapped_column(String(16), default="overlay", comment="overlay / translated / bilingual")
     page: Mapped[int] = mapped_column(Integer, default=0)
     scroll_ratio: Mapped[float] = mapped_column(Float, default=0.0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

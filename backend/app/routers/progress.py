@@ -3,7 +3,7 @@
 GET  /api/progress/{paper_id}          → 读取当前用户在该论文的进度
 PUT  /api/progress/{paper_id}          → 上报进度（覆盖写，按 user+paper 唯一）
 
-进度字段：mode（overlay/bilingual）、page、scroll_ratio。
+进度字段：mode（overlay/translated/bilingual）、page、scroll_ratio。
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -17,7 +17,7 @@ router = APIRouter()
 
 
 class ProgressIn(BaseModel):
-    mode: str = Field(default="overlay", pattern="^(overlay|bilingual)$")
+    mode: str = Field(default="overlay", pattern="^(overlay|translated|bilingual)$")
     page: int = Field(default=1, ge=1)
     scroll_ratio: float = Field(default=0.0, ge=0.0, le=1.0)
 
