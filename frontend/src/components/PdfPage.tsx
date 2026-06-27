@@ -13,6 +13,10 @@ interface Props {
  * TextLayer 使内容可划词选择 —— 划词解读功能依赖它。
  * 从 PdfCanvas 抽出，供单页（paged）与连续滚动（scroll）复用。
  */
+/** 超采样系数：用 scale×dpr×SS 的高内部分辨率渲染，再让浏览器降采样到显示尺寸，
+ * 使矢量文字字边更锐。1=只做正确高清、不超采样（最省）；1.5=均衡（推荐）；2=最锐但最重（像素≈4×）。 */
+const SUPERSAMPLE = 1.5;
+
 export default function PdfPage({ doc, pageNumber, scale }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
@@ -26,39 +30,43 @@ export default function PdfPage({ doc, pageNumber, scale }: Props) {
       try {
         const pdfPage = await doc.getPage(pageNumber);
         if (cancelled) return;
-        const vp = pdfPage.getViewport({ scale });
 
-        // canvas
+        // 高清渲染：把 dpr + 超采样折进 viewport 的 scale，让 pdf.js 直接在高物理
+        // 分辨率下光栅化矢量内容，而非"画小图再矩阵拉伸放大"（后者正是字发虚的根因）。
+        // canvas 用放大尺寸（物理像素），CSS 尺寸保持显示尺寸，浏览器自然降采样。
+        const dpr = window.devicePixelRatio || 1;
+        const displayVp = pdfPage.getViewport({ scale });
+        const renderVp = pdfPage.getViewport({ scale: scale * dpr * SUPERSAMPLE });
+
         const canvas = canvasRef.current;
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
-        const dpr = window.devicePixelRatio || 1;
-        canvas.width = vp.width * dpr;
-        canvas.height = vp.height * dpr;
-        canvas.style.width = `${vp.width}px`;
-        canvas.style.height = `${vp.height}px`;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        await pdfPage.render({ canvasContext: ctx, viewport: vp }).promise;
+        canvas.width = renderVp.width;
+        canvas.height = renderVp.height;
+        canvas.style.width = `${displayVp.width}px`;
+        canvas.style.height = `${displayVp.height}px`;
+        // 不再 setTransform —— renderVp 已含放大倍率，pdf.js 据此 1:1 高清绘制
+        await pdfPage.render({ canvasContext: ctx, viewport: renderVp }).promise;
         if (cancelled) return;
 
-        // TextLayer（透明可选择文本层，对齐 canvas）
+        // TextLayer（透明可选择文本层，对齐到显示盒，划词不受超采样影响）
         const textLayer = textLayerRef.current;
         textLayer.innerHTML = "";
-        textLayer.style.width = `${vp.width}px`;
-        textLayer.style.height = `${vp.height}px`;
+        textLayer.style.width = `${displayVp.width}px`;
+        textLayer.style.height = `${displayVp.height}px`;
         const textContent = await pdfPage.getTextContent();
         if (cancelled) return;
         const PdfLibAny = pdfjsLib as unknown as {
           TextLayer: new (opts: {
             textContentSource: Awaited<ReturnType<typeof pdfPage.getTextContent>>;
             container: HTMLElement;
-            viewport: typeof vp;
+            viewport: typeof displayVp;
           }) => { render: () => Promise<void> };
         };
         const tl = new PdfLibAny.TextLayer({
           textContentSource: textContent,
           container: textLayer,
-          viewport: vp,
+          viewport: displayVp,
         });
         await tl.render();
       } catch (e) {
