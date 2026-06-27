@@ -1,6 +1,8 @@
+import { useRef } from "react";
 import { useDevice } from "../hooks/useDevice";
 import PdfCanvas from "./PdfCanvas";
 import TranslationPane from "./TranslationPane";
+import PdfScroll, { type PdfScrollHandle } from "./PdfScroll";
 
 interface Props {
   fileUrl: string; // 原始 PDF（英文）
@@ -10,17 +12,15 @@ interface Props {
   translationProgress?: number | null; // 0-100，running 时有值；null=暂未上报
   page: number; // 当前页（1-based，与原版面模式共享）
   scale: number;
+  pageMode: "paged" | "scroll";
+  onPageChange?: (page: number) => void;
 }
 
 /**
- * 双语对照：左侧原始 PDF（英文，保留原版面），右侧译文 PDF（中文，由 pdf2zh 生成，
- * 完整保留公式/图表/版面）。两列都用 PdfCanvas 渲染，均带 TextLayer 可划词。
- *
- * 翻译未完成时右侧（TranslationPane 内部）显示翻译进度占位：
- *  - 有精确进度（0-100）：百分比 + 确定进度条
- *  - 无精确进度（null）：indeterminate 动画条（pdf2zh 排队/启动中）
- * 翻译失败显示错误 + 重试提示。
- * PC 左右并排；移动端上下叠放。
+ * 双语对照：左原始 PDF（英文），右译文 PDF（中文）。
+ * - paged：PC 左右并排单页，移动端上下叠放；
+ * - scroll：左右两列各自连续滚动并按滚动比例联动（节流 + 防回环）。
+ * 翻译未完成时右栏显示进度占位（TranslationPane 内部处理）。
  */
 export default function BilingualView({
   fileUrl,
@@ -30,9 +30,79 @@ export default function BilingualView({
   translationProgress,
   page,
   scale,
+  pageMode,
+  onPageChange,
 }: Props) {
   const { isMobile } = useDevice();
+  const translatedReady = translationStatus === "done";
 
+  // ===== scroll 模式：两列联动 =====
+  const leftRef = useRef<PdfScrollHandle>(null);
+  const rightRef = useRef<PdfScrollHandle>(null);
+  // 哪一列是「主导」（最近一次用户滚动来源），用 ratio 同步另一列
+  const syncingRef = useRef(false);
+
+  if (pageMode === "scroll") {
+    // 译文未就绪：右栏回退为进度占位，左栏单独滚动
+    return (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: isMobile ? "column" : "row",
+          gap: isMobile ? 12 : 16,
+          height: "100%",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0, height: "100%" }}>
+          <PdfScroll
+            ref={leftRef}
+            fileUrl={fileUrl}
+            scale={scale}
+            initialPage={page}
+            onPageChange={onPageChange}
+            onUserScrollRatio={(r) => {
+              if (syncingRef.current || !translatedReady) return;
+              syncingRef.current = true;
+              rightRef.current?.setScrollRatio(r);
+              syncingRef.current = false;
+            }}
+          />
+        </div>
+        <div style={{ flex: 1, minWidth: 0, height: "100%" }}>
+          {translatedReady ? (
+            <PdfScroll
+              ref={rightRef}
+              fileUrl={translatedFileUrl}
+              scale={scale}
+              initialPage={page}
+              onPageChange={() => {
+                /* 双语下以左栏页码为准，右栏不覆盖 */
+              }}
+              onUserScrollRatio={(r) => {
+                if (syncingRef.current) return;
+                syncingRef.current = true;
+                leftRef.current?.setScrollRatio(r);
+                syncingRef.current = false;
+              }}
+            />
+          ) : (
+            <div style={{ height: "100%", overflow: "auto", padding: 16 }}>
+              <TranslationPane
+                translatedFileUrl={translatedFileUrl}
+                translationStatus={translationStatus}
+                translationError={translationError}
+                translationProgress={translationProgress}
+                page={page}
+                scale={scale}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ===== paged 模式：现状左右单页 =====
   return (
     <div
       style={{

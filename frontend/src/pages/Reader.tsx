@@ -5,12 +5,24 @@ import type { PaperDetail } from "../api/types";
 import { useDevice } from "../hooks/useDevice";
 import { useSelection } from "../hooks/useSelection";
 import PdfCanvas from "../components/PdfCanvas";
+import PdfScroll from "../components/PdfScroll";
 import BilingualView from "../components/BilingualView";
 import TranslatedView from "../components/TranslatedView";
 import SelectionToolbar from "../components/SelectionToolbar";
 import InterpretPanel from "../components/InterpretPanel";
 
 type Mode = "overlay" | "translated" | "bilingual";
+type PageMode = "paged" | "scroll";
+
+const PAGE_MODE_KEY = "reader.pageMode";
+function readPageMode(): PageMode {
+  try {
+    const v = localStorage.getItem(PAGE_MODE_KEY);
+    return v === "scroll" ? "scroll" : "paged";
+  } catch {
+    return "paged";
+  }
+}
 
 export default function Reader() {
   const { id } = useParams<{ id: string }>();
@@ -31,6 +43,8 @@ export default function Reader() {
   const [mode, setMode] = useState<Mode>("overlay");
   const [page, setPage] = useState(1);
   const [scale, setScale] = useState(1.4);
+  // 翻页方式：左右翻页 / 上下滚动（全局偏好，存 localStorage）
+  const [pageMode, setPageMode] = useState<PageMode>(readPageMode);
 
   // 划词解读状态
   const contentRef = useRef<HTMLDivElement>(null);
@@ -77,6 +91,36 @@ export default function Reader() {
   }, [paperId, isMobile]);
 
   const totalPages = paper?.total_pages ?? 1;
+
+  // 切换翻页方式：写入 localStorage（全局偏好）
+  const changePageMode = (m: PageMode) => {
+    setPageMode(m);
+    try {
+      localStorage.setItem(PAGE_MODE_KEY, m);
+    } catch {
+      /* 忽略 */
+    }
+  };
+
+  // 键盘快捷键：仅「左右翻页」模式下，← 上一页 / → 下一页（仅这两个键）。
+  // scroll 模式不劫持键盘，依赖浏览器原生滚动。
+  useEffect(() => {
+    if (pageMode !== "paged") return;
+    const onKey = (e: KeyboardEvent) => {
+      // 输入框/文本域内不响应，避免影响划词与表单
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setPage((p) => Math.max(1, p - 1));
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        setPage((p) => Math.min(totalPages, p + 1));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pageMode, totalPages]);
 
   // 进度上报
   useEffect(() => {
@@ -153,7 +197,7 @@ export default function Reader() {
   if (!paper) return <Center>未找到论文</Center>;
 
   return (
-    <div style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <Toolbar
         paper={paper}
         mode={mode}
@@ -163,6 +207,8 @@ export default function Reader() {
         onPageChange={setPage}
         scale={scale}
         onScaleChange={setScale}
+        pageMode={pageMode}
+        onPageModeChange={changePageMode}
         translationStatus={translationStatus}
         translationProgress={translationProgress}
         onRetryTranslate={handleRetryTranslate}
@@ -171,12 +217,26 @@ export default function Reader() {
 
       <div
         ref={contentRef}
-        style={{ flex: 1, overflow: "auto", padding: 16, background: "var(--bg)" }}
+        style={{
+          flex: 1,
+          overflow: pageMode === "scroll" ? "hidden" : "auto",
+          padding: pageMode === "scroll" ? 0 : 16,
+          background: "var(--bg)",
+        }}
       >
         {mode === "overlay" ? (
-          <div style={{ display: "flex", justifyContent: "center" }}>
-            <PdfCanvas fileUrl={api.paperFileUrl(paperId)} page={page} scale={scale} />
-          </div>
+          pageMode === "scroll" ? (
+            <PdfScroll
+              fileUrl={api.paperFileUrl(paperId)}
+              scale={scale}
+              initialPage={page}
+              onPageChange={setPage}
+            />
+          ) : (
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <PdfCanvas fileUrl={api.paperFileUrl(paperId)} page={page} scale={scale} />
+            </div>
+          )
         ) : mode === "translated" ? (
           <TranslatedView
             translatedFileUrl={api.translatedFileUrl(paperId)}
@@ -185,6 +245,8 @@ export default function Reader() {
             translationProgress={translationProgress}
             page={page}
             scale={scale}
+            pageMode={pageMode}
+            onPageChange={setPage}
           />
         ) : (
           <BilingualView
@@ -195,6 +257,8 @@ export default function Reader() {
             translationProgress={translationProgress}
             page={page}
             scale={scale}
+            pageMode={pageMode}
+            onPageChange={setPage}
           />
         )}
       </div>
@@ -214,6 +278,8 @@ function Toolbar(props: {
   onPageChange: (p: number) => void;
   scale: number;
   onScaleChange: (s: number) => void;
+  pageMode: PageMode;
+  onPageModeChange: (m: PageMode) => void;
   translationStatus: string;
   translationProgress?: number | null;
   onRetryTranslate: () => void;
@@ -228,6 +294,8 @@ function Toolbar(props: {
     onPageChange,
     scale,
     onScaleChange,
+    pageMode,
+    onPageModeChange,
     translationStatus,
     translationProgress,
     onRetryTranslate,
@@ -286,6 +354,24 @@ function Toolbar(props: {
       <span style={{ fontSize: 12, color: "var(--muted)" }}>{statusText}</span>
 
       <div style={{ flex: 1 }} />
+
+      {/* 翻页方式：左右翻页 / 上下滚动 */}
+      <div style={{ display: "flex", background: "var(--bg)", borderRadius: 8, padding: 3, border: "1px solid var(--border)" }}>
+        {(["paged", "scroll"] as PageMode[]).map((pm) => (
+          <button
+            key={pm}
+            onClick={() => onPageModeChange(pm)}
+            title={pm === "paged" ? "左右翻页（← →）" : "上下滚动翻页（滚轮/触控板）"}
+            style={{
+              ...modeBtn,
+              background: pageMode === pm ? "var(--primary)" : "transparent",
+              color: pageMode === pm ? "#fff" : "var(--fg)",
+            }}
+          >
+            {pm === "paged" ? "左右" : "滚动"}
+          </button>
+        ))}
+      </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <button onClick={() => onPageChange(Math.max(1, page - 1))} disabled={page <= 1} style={ghostBtn}>
