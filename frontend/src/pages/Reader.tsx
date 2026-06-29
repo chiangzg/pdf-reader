@@ -9,7 +9,8 @@ import PdfScroll from "../components/PdfScroll";
 import BilingualView from "../components/BilingualView";
 import TranslatedView from "../components/TranslatedView";
 import SelectionToolbar from "../components/SelectionToolbar";
-import InterpretPanel, { type SessionInit } from "../components/InterpretPanel";
+import InterpretPanel from "../components/InterpretPanel";
+import type { NewSessionInit } from "../hooks/useSession";
 import RightDrawer from "../components/RightDrawer";
 
 type Mode = "overlay" | "translated" | "bilingual";
@@ -57,13 +58,16 @@ export default function Reader() {
 
   // 划词解读会话状态
   const contentRef = useRef<HTMLDivElement>(null);
-  const [sessionInit, setSessionInit] = useState<SessionInit | null>(null);
+  // 首轮解读浮窗（仅 new 模式）；resume 不弹浮窗，改在抽屉内手风琴展开
+  const [sessionInit, setSessionInit] = useState<NewSessionInit | null>(null);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
 
   // 划词历史（会话列表）
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [hoveredId, setHoveredId] = useState<number | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(readDrawerOpen);
+  // 抽屉内手风琴展开的会话 id（null=无展开）
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const { selection, clear: clearSelection } = useSelection(contentRef);
 
@@ -207,10 +211,10 @@ export default function Reader() {
     clearSelection();
   };
 
-  /** 续接既有会话：载入历史消息进入会话模式 */
+  /** 续接既有会话：在抽屉内手风琴展开（不弹浮窗） */
   const handleResume = (highlightId: number) => {
-    setAnchorRect(selection?.rect ?? null);
-    setSessionInit({ mode: "resume", highlightId });
+    if (!drawerOpen) changeDrawer(true);
+    setExpandedId(highlightId);
     clearSelection();
   };
 
@@ -244,6 +248,7 @@ export default function Reader() {
 
   const handleDeleteHighlight = async (id: number) => {
     setHighlights((hs) => hs.filter((h) => h.id !== id));
+    if (expandedId === id) setExpandedId(null);
     try {
       await api.deleteHighlight(id);
     } catch {
@@ -260,20 +265,20 @@ export default function Reader() {
     }
   };
 
-  /** 点击正文中的下划线 → 打开该会话视图 */
+  // 翻页后，若当前展开的会话不在新页（coords 不命中当前页），自动收起
+  useEffect(() => {
+    if (expandedId == null) return;
+    const h = highlights.find((x) => x.id === expandedId);
+    if (!h || !h.coords.some((c) => c.page === page)) {
+      setExpandedId(null);
+    }
+  }, [page, expandedId, highlights]);
+
+  /** 点击正文中的下划线 → 在抽屉内展开该会话 */
   const handleHighlightClick = (h: Highlight) => {
     setHoveredId(h.id);
     if (!drawerOpen) changeDrawer(true);
-    // 同时打开会话面板（续接模式）
-    setAnchorRect(null);
-    setSessionInit({ mode: "resume", highlightId: h.id });
-  };
-
-  /** 点击抽屉会话项 → 打开会话视图 */
-  const handleOpenSession = (highlightId: number) => {
-    setHoveredId(highlightId);
-    setAnchorRect(null);
-    setSessionInit({ mode: "resume", highlightId });
+    setExpandedId(h.id);
   };
 
   if (loading) return <Center>加载中…</Center>;
@@ -384,7 +389,8 @@ export default function Reader() {
             onClose={() => changeDrawer(false)}
             onHover={setHoveredId}
             activeId={hoveredId}
-            onOpenSession={handleOpenSession}
+            expandedId={expandedId}
+            onToggleExpand={setExpandedId}
             onDelete={handleDeleteHighlight}
           />
         )}
