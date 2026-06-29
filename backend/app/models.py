@@ -4,6 +4,7 @@
 - users          用户
 - papers         论文（按 source_hash 去重，归属用户；含翻译状态与译文 PDF 路径）
 - progress       阅读进度（user+paper 唯一）
+- highlights     划词 AI 解读记录（user+paper 多条，每次划词新增）
 
 翻译由独立的 pdf2zh 服务生成译文 PDF 文件，不再做段落级文本提取。
 """
@@ -82,3 +83,29 @@ class Progress(Base):
     paper: Mapped["Paper"] = relationship(back_populates="progresses")
 
     __table_args__ = (UniqueConstraint("user_id", "paper_id", name="uq_progress_user_paper"),)
+
+
+class Highlight(Base):
+    """划词 AI 解读记录。
+
+    每次划词解读都新增一条（不去重，按时间倒序展示历史）。
+    coords 存 JSON 数组：[{page, x, y, w, h}, ...]，坐标为相对该页 viewport 的归一化值（0~1），
+    抗缩放与翻页模式切换；每个矩形带 page，天然支持跨页记录展示。
+    variant 区分原文/译文侧（bilingual 双语对照下两侧都能划）。
+    """
+
+    __tablename__ = "highlights"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    paper_id: Mapped[int] = mapped_column(ForeignKey("papers.id", ondelete="CASCADE"), index=True, nullable=False)
+    variant: Mapped[str] = mapped_column(String(16), nullable=False, comment="original / translated")
+    text: Mapped[str] = mapped_column(Text(), nullable=False, comment="划词原文")
+    result: Mapped[str] = mapped_column(Text(), nullable=False, comment="AI 解读全文")
+    coords: Mapped[str] = mapped_column(Text(), nullable=False, comment="JSON: [{page,x,y,w,h}, ...] 归一化 0~1")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    paper: Mapped["Paper"] = relationship()
+    user: Mapped["User"] = relationship()
+
+    __table_args__ = (Index("ix_highlights_user_paper", "user_id", "paper_id"),)

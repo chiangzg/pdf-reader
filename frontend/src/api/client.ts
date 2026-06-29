@@ -1,4 +1,4 @@
-import type { PaperDetail, PaperListOut, TranslationStatusOut } from "./types";
+import type { Highlight, HighlightIn, PaperDetail, PaperListOut, TranslationStatusOut } from "./types";
 
 const BASE = "/api";
 
@@ -199,5 +199,25 @@ export const api = {
         if (e?.name !== "AbortError") onError(e?.message || "网络错误");
       });
     return controller;
+  },
+
+  // ===== 划词历史 =====
+  async listHighlights(paperId: number): Promise<Highlight[]> {
+    const res = await afetch(`${BASE}/highlights/${paperId}`);
+    return jsonOrThrow(res);
+  },
+
+  async createHighlight(paperId: number, data: HighlightIn): Promise<Highlight> {
+    const res = await afetch(`${BASE}/highlights/${paperId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return jsonOrThrow(res);
+  },
+
+  async deleteHighlight(highlightId: number): Promise<void> {
+    const res = await afetch(`${BASE}/highlights/${highlightId}`, { method: "DELETE" });
+    if (!res.ok) throw new Error("删除失败");
   },
 };

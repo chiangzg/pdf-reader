@@ -1,6 +1,7 @@
 import PdfCanvas from "./PdfCanvas";
 import TranslationPane from "./TranslationPane";
 import PdfScroll from "./PdfScroll";
+import type { Highlight } from "../api/types";
 
 interface Props {
   translatedFileUrl: string; // 译文 PDF（mono，纯中文版面）
@@ -11,6 +12,9 @@ interface Props {
   scale: number;
   pageMode: "paged" | "scroll";
   onPageChange?: (page: number) => void;
+  highlights?: Highlight[];
+  hoveredId?: number | null;
+  onHighlightClick?: (h: Highlight) => void;
 }
 
 /**
@@ -27,6 +31,9 @@ export default function TranslatedView({
   scale,
   pageMode,
   onPageChange,
+  highlights,
+  hoveredId,
+  onHighlightClick,
 }: Props) {
   const translatedReady = translationStatus === "done";
 
@@ -53,6 +60,10 @@ export default function TranslatedView({
         scale={scale}
         initialPage={page}
         onPageChange={onPageChange}
+        variant="translated"
+        highlights={highlights}
+        hoveredId={hoveredId}
+        onHighlightClick={onHighlightClick}
       />
     );
   }
@@ -60,7 +71,15 @@ export default function TranslatedView({
   // paged：复用 PdfCanvas（加载+单页渲染，与原版面一致）
   return (
     <div style={{ display: "flex", justifyContent: "center" }}>
-      <PdfCanvas fileUrl={translatedFileUrl} page={page} scale={scale} />
+      <PdfCanvas
+        fileUrl={translatedFileUrl}
+        page={page}
+        scale={scale}
+        variant="translated"
+        highlights={highlights}
+        hoveredId={hoveredId}
+        onHighlightClick={onHighlightClick}
+      />
     </div>
   );
 }

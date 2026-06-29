@@ -1,26 +1,35 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { PaperDetail } from "../api/types";
+import type { Highlight, PaperDetail } from "../api/types";
 import { useDevice } from "../hooks/useDevice";
-import { useSelection } from "../hooks/useSelection";
+import { useSelection, toHighlightCoords } from "../hooks/useSelection";
 import PdfCanvas from "../components/PdfCanvas";
 import PdfScroll from "../components/PdfScroll";
 import BilingualView from "../components/BilingualView";
 import TranslatedView from "../components/TranslatedView";
 import SelectionToolbar from "../components/SelectionToolbar";
 import InterpretPanel from "../components/InterpretPanel";
+import RightDrawer from "../components/RightDrawer";
 
 type Mode = "overlay" | "translated" | "bilingual";
 type PageMode = "paged" | "scroll";
 
 const PAGE_MODE_KEY = "reader.pageMode";
+const DRAWER_KEY = "reader.drawerOpen";
 function readPageMode(): PageMode {
   try {
     const v = localStorage.getItem(PAGE_MODE_KEY);
     return v === "scroll" ? "scroll" : "paged";
   } catch {
     return "paged";
+  }
+}
+function readDrawerOpen(): boolean {
+  try {
+    return localStorage.getItem(DRAWER_KEY) !== "0";
+  } catch {
+    return true;
   }
 }
 
@@ -50,6 +59,18 @@ export default function Reader() {
   const contentRef = useRef<HTMLDivElement>(null);
   const [interpretText, setInterpretText] = useState<string | null>(null);
   const [interpretRect, setInterpretRect] = useState<DOMRect | null>(null);
+  // 最近一次划词的选区信息（含 page/variant/normRects），解读完成后用于落库
+  const lastSelectionRef = useRef<{
+    page: number;
+    variant: "original" | "translated";
+    text: string;
+    normRects: { page: number; x: number; y: number; w: number; h: number }[];
+  } | null>(null);
+
+  // 划词历史
+  const [highlights, setHighlights] = useState<Highlight[]>([]);
+  const [hoveredId, setHoveredId] = useState<number | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(readDrawerOpen);
 
   const { selection, clear: clearSelection } = useSelection(contentRef);
 
@@ -74,6 +95,13 @@ export default function Reader() {
           }
         } catch {
           /* 忽略 */
+        }
+        // 拉取划词历史（一次拉全量，前端缓存）
+        try {
+          const hs = await api.listHighlights(paperId);
+          if (!cancelled) setHighlights(hs);
+        } catch {
+          /* 忽略：未登录或后端不可达，划词历史为空 */
         }
         if (!cancelled) {
           setMode(initMode);
@@ -174,6 +202,15 @@ export default function Reader() {
   };
 
   const handleInterpret = (text: string, rect: DOMRect) => {
+    // selection 来自 useSelection，已带 page/variant/normRects，落库时复用
+    if (selection) {
+      lastSelectionRef.current = {
+        page: selection.page,
+        variant: selection.variant,
+        text: selection.text,
+        normRects: selection.normRects,
+      };
+    }
     setInterpretText(text);
     setInterpretRect(rect);
   };
@@ -182,6 +219,47 @@ export default function Reader() {
     setInterpretText(null);
     setInterpretRect(null);
     clearSelection();
+  };
+
+  /** SSE 解读完成 → 落库，成功后本地 unshift 新记录到抽屉顶部 */
+  const handleInterpretDone = async (fullResult: string) => {
+    const sel = lastSelectionRef.current;
+    if (!sel || !fullResult.trim()) return;
+    try {
+      const created = await api.createHighlight(paperId, {
+        variant: sel.variant,
+        text: sel.text,
+        result: fullResult,
+        coords: toHighlightCoords(sel.normRects),
+      });
+      setHighlights((hs) => [created, ...hs]);
+    } catch {
+      /* 落库失败不影响用户已看到的解读 */
+    }
+  };
+
+  const handleDeleteHighlight = async (id: number) => {
+    setHighlights((hs) => hs.filter((h) => h.id !== id));
+    try {
+      await api.deleteHighlight(id);
+    } catch {
+      /* 删除失败已乐观移除前端，忽略后端错误 */
+    }
+  };
+
+  const changeDrawer = (open: boolean) => {
+    setDrawerOpen(open);
+    try {
+      localStorage.setItem(DRAWER_KEY, open ? "1" : "0");
+    } catch {
+      /* 忽略 */
+    }
+  };
+
+  /** 点击正文中的下划线 → 打开抽屉并高亮对应记录 */
+  const handleHighlightClick = (h: Highlight) => {
+    setHoveredId(h.id);
+    if (!drawerOpen) changeDrawer(true);
   };
 
   if (loading) return <Center>加载中…</Center>;
@@ -213,58 +291,97 @@ export default function Reader() {
         translationProgress={translationProgress}
         onRetryTranslate={handleRetryTranslate}
         onBack={() => navigate("/")}
+        drawerOpen={drawerOpen}
+        onToggleDrawer={() => changeDrawer(!drawerOpen)}
       />
 
-      <div
-        ref={contentRef}
-        style={{
-          flex: 1,
-          overflow: pageMode === "scroll" ? "hidden" : "auto",
-          padding: pageMode === "scroll" ? 0 : 16,
-          background: "var(--bg)",
-        }}
-      >
-        {mode === "overlay" ? (
-          pageMode === "scroll" ? (
-            <PdfScroll
-              fileUrl={api.paperFileUrl(paperId)}
+      {/* 正文 + 右侧抽屉：PC 挤压式 flex row；移动端抽屉由 RightDrawer 自身处理 */}
+      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+        <div
+          ref={contentRef}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            overflow: pageMode === "scroll" ? "hidden" : "auto",
+            padding: pageMode === "scroll" ? 0 : 16,
+            background: "var(--bg)",
+          }}
+        >
+          {mode === "overlay" ? (
+            pageMode === "scroll" ? (
+              <PdfScroll
+                fileUrl={api.paperFileUrl(paperId)}
+                scale={scale}
+                initialPage={page}
+                onPageChange={setPage}
+                highlights={highlights}
+                hoveredId={hoveredId}
+                onHighlightClick={handleHighlightClick}
+              />
+            ) : (
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <PdfCanvas
+                  fileUrl={api.paperFileUrl(paperId)}
+                  page={page}
+                  scale={scale}
+                  highlights={highlights}
+                  hoveredId={hoveredId}
+                  onHighlightClick={handleHighlightClick}
+                />
+              </div>
+            )
+          ) : mode === "translated" ? (
+            <TranslatedView
+              translatedFileUrl={api.translatedFileUrl(paperId)}
+              translationStatus={translationStatus}
+              translationError={translationError}
+              translationProgress={translationProgress}
+              page={page}
               scale={scale}
-              initialPage={page}
+              pageMode={pageMode}
               onPageChange={setPage}
+              highlights={highlights}
+              hoveredId={hoveredId}
+              onHighlightClick={handleHighlightClick}
             />
           ) : (
-            <div style={{ display: "flex", justifyContent: "center" }}>
-              <PdfCanvas fileUrl={api.paperFileUrl(paperId)} page={page} scale={scale} />
-            </div>
-          )
-        ) : mode === "translated" ? (
-          <TranslatedView
-            translatedFileUrl={api.translatedFileUrl(paperId)}
-            translationStatus={translationStatus}
-            translationError={translationError}
-            translationProgress={translationProgress}
-            page={page}
-            scale={scale}
-            pageMode={pageMode}
-            onPageChange={setPage}
-          />
-        ) : (
-          <BilingualView
-            fileUrl={api.paperFileUrl(paperId)}
-            translatedFileUrl={api.translatedFileUrl(paperId)}
-            translationStatus={translationStatus}
-            translationError={translationError}
-            translationProgress={translationProgress}
-            page={page}
-            scale={scale}
-            pageMode={pageMode}
-            onPageChange={setPage}
+            <BilingualView
+              fileUrl={api.paperFileUrl(paperId)}
+              translatedFileUrl={api.translatedFileUrl(paperId)}
+              translationStatus={translationStatus}
+              translationError={translationError}
+              translationProgress={translationProgress}
+              page={page}
+              scale={scale}
+              pageMode={pageMode}
+              onPageChange={setPage}
+              highlights={highlights}
+              hoveredId={hoveredId}
+              onHighlightClick={handleHighlightClick}
+            />
+          )}
+        </div>
+
+        {drawerOpen && (
+          <RightDrawer
+            highlights={highlights}
+            currentPage={page}
+            open={drawerOpen}
+            onClose={() => changeDrawer(false)}
+            onHover={setHoveredId}
+            activeId={hoveredId}
+            onDelete={handleDeleteHighlight}
           />
         )}
       </div>
 
       <SelectionToolbar rect={selection?.rect ?? null} text={selection?.text ?? null} onInterpret={handleInterpret} />
-      <InterpretPanel text={interpretText} anchorRect={interpretRect} onClose={closeInterpret} />
+      <InterpretPanel
+        text={interpretText}
+        anchorRect={interpretRect}
+        onClose={closeInterpret}
+        onDone={handleInterpretDone}
+      />
     </div>
   );
 }
@@ -284,6 +401,8 @@ function Toolbar(props: {
   translationProgress?: number | null;
   onRetryTranslate: () => void;
   onBack: () => void;
+  drawerOpen: boolean;
+  onToggleDrawer: () => void;
 }) {
   const {
     paper,
@@ -300,6 +419,8 @@ function Toolbar(props: {
     translationProgress,
     onRetryTranslate,
     onBack,
+    drawerOpen,
+    onToggleDrawer,
   } = props;
 
   const statusText =
@@ -354,6 +475,15 @@ function Toolbar(props: {
       <span style={{ fontSize: 12, color: "var(--muted)" }}>{statusText}</span>
 
       <div style={{ flex: 1 }} />
+
+      {/* 划词历史抽屉开关 */}
+      <button
+        onClick={onToggleDrawer}
+        title={drawerOpen ? "收起划词记录" : "展开划词记录"}
+        style={{ ...ghostBtn, background: drawerOpen ? "var(--primary)" : "transparent", color: drawerOpen ? "#fff" : "var(--fg)" }}
+      >
+        📖 历史
+      </button>
 
       {/* 翻页方式：左右翻页 / 上下滚动 */}
       <div style={{ display: "flex", background: "var(--bg)", borderRadius: 8, padding: 3, border: "1px solid var(--border)" }}>

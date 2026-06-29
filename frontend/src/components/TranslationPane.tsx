@@ -1,4 +1,5 @@
 import PdfCanvas from "./PdfCanvas";
+import type { Highlight } from "../api/types";
 
 interface Props {
   translatedFileUrl: string; // 译文 PDF（mono，纯中文版面）
@@ -7,11 +8,14 @@ interface Props {
   translationProgress?: number | null; // 0-100，running 时有值；null=暂未上报
   page: number; // 当前页（1-based）
   scale: number;
+  highlights?: Highlight[];
+  hoveredId?: number | null;
+  onHighlightClick?: (h: Highlight) => void;
 }
 
 /**
  * 译文面板：复用于「译文版面」与「双语对照」的右栏。
- * 译文就绪（status=done）则用 PdfCanvas 渲染（带 TextLayer 可划词）；
+ * 译文就绪（status=done）则用 PdfCanvas 渲染（带 TextLayer 可划词，variant=translated）；
  * 否则渲染翻译进度占位（确定进度条 / indeterminate / 失败提示）。
  */
 export default function TranslationPane({
@@ -21,11 +25,22 @@ export default function TranslationPane({
   translationProgress,
   page,
   scale,
+  highlights,
+  hoveredId,
+  onHighlightClick,
 }: Props) {
   const translatedReady = translationStatus === "done";
 
   return translatedReady ? (
-    <PdfCanvas fileUrl={translatedFileUrl} page={page} scale={scale} />
+    <PdfCanvas
+      fileUrl={translatedFileUrl}
+      page={page}
+      scale={scale}
+      variant="translated"
+      highlights={highlights}
+      hoveredId={hoveredId}
+      onHighlightClick={onHighlightClick}
+    />
   ) : (
     <TranslationPlaceholder
       status={translationStatus}

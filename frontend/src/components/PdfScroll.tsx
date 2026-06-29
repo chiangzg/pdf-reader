@@ -8,6 +8,7 @@ import {
 } from "react";
 import PdfPage from "./PdfPage";
 import { useBasePageSizes, usePdfDocument } from "../hooks/usePdfDocument";
+import type { Highlight } from "../api/types";
 
 export interface PdfScrollHandle {
   scrollToPage: (n: number) => void;
@@ -24,6 +25,11 @@ interface Props {
   onPageChange?: (page: number) => void;
   /** 用户（非程序）滚动时回调当前滚动比例，用于双语两列联动 */
   onUserScrollRatio?: (ratio: number) => void;
+  /** 本 PDF 所属侧：原文 / 译文 */
+  variant?: "original" | "translated";
+  highlights?: Highlight[];
+  hoveredId?: number | null;
+  onHighlightClick?: (h: Highlight) => void;
 }
 
 /** 视口上下各多渲染这么多 px，避免快速滚动时出现空白 */
@@ -39,7 +45,7 @@ const EST_SIZE = { width: 612, height: 792 };
  * - 暴露 scrollToPage / getScrollRatio / setScrollRatio（恢复 + 键盘 + 双语联动）。
  */
 const PdfScroll = forwardRef<PdfScrollHandle, Props>(function PdfScroll(
-  { fileUrl, scale, gap = 16, initialPage = 1, onPageChange, onUserScrollRatio },
+  { fileUrl, scale, gap = 16, initialPage = 1, onPageChange, onUserScrollRatio, variant = "original", highlights, hoveredId, onHighlightClick },
   ref
 ) {
   const { doc, numPages, loading, error } = usePdfDocument(fileUrl);
@@ -233,7 +239,17 @@ const PdfScroll = forwardRef<PdfScrollHandle, Props>(function PdfScroll(
                 boxShadow: "0 1px 8px rgba(0,0,0,.15)",
               }}
             >
-              {visible ? <PdfPage doc={doc} pageNumber={pageNo} scale={scale} /> : null}
+              {visible ? (
+                <PdfPage
+                  doc={doc}
+                  pageNumber={pageNo}
+                  scale={scale}
+                  variant={variant}
+                  highlights={highlights}
+                  hoveredId={hoveredId}
+                  onHighlightClick={onHighlightClick}
+                />
+              ) : null}
             </div>
           );
         })}

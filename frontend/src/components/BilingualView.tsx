@@ -3,6 +3,7 @@ import { useDevice } from "../hooks/useDevice";
 import PdfCanvas from "./PdfCanvas";
 import TranslationPane from "./TranslationPane";
 import PdfScroll, { type PdfScrollHandle } from "./PdfScroll";
+import type { Highlight } from "../api/types";
 
 interface Props {
   fileUrl: string; // 原始 PDF（英文）
@@ -14,6 +15,9 @@ interface Props {
   scale: number;
   pageMode: "paged" | "scroll";
   onPageChange?: (page: number) => void;
+  highlights?: Highlight[];
+  hoveredId?: number | null;
+  onHighlightClick?: (h: Highlight) => void;
 }
 
 /**
@@ -32,6 +36,9 @@ export default function BilingualView({
   scale,
   pageMode,
   onPageChange,
+  highlights,
+  hoveredId,
+  onHighlightClick,
 }: Props) {
   const { isMobile } = useDevice();
   const translatedReady = translationStatus === "done";
@@ -60,6 +67,10 @@ export default function BilingualView({
             scale={scale}
             initialPage={page}
             onPageChange={onPageChange}
+            variant="original"
+            highlights={highlights}
+            hoveredId={hoveredId}
+            onHighlightClick={onHighlightClick}
             onUserScrollRatio={(r) => {
               if (syncingRef.current || !translatedReady) return;
               syncingRef.current = true;
@@ -75,6 +86,10 @@ export default function BilingualView({
               fileUrl={translatedFileUrl}
               scale={scale}
               initialPage={page}
+              variant="translated"
+              highlights={highlights}
+              hoveredId={hoveredId}
+              onHighlightClick={onHighlightClick}
               onPageChange={() => {
                 /* 双语下以左栏页码为准，右栏不覆盖 */
               }}
@@ -94,6 +109,9 @@ export default function BilingualView({
                 translationProgress={translationProgress}
                 page={page}
                 scale={scale}
+                highlights={highlights}
+                hoveredId={hoveredId}
+                onHighlightClick={onHighlightClick}
               />
             </div>
           )}
@@ -115,7 +133,15 @@ export default function BilingualView({
     >
       {/* 左侧：原始 PDF（英文原版面） */}
       <div style={{ flex: "0 0 auto", display: "flex", justifyContent: "center" }}>
-        <PdfCanvas fileUrl={fileUrl} page={page} scale={scale} />
+        <PdfCanvas
+          fileUrl={fileUrl}
+          page={page}
+          scale={scale}
+          variant="original"
+          highlights={highlights}
+          hoveredId={hoveredId}
+          onHighlightClick={onHighlightClick}
+        />
       </div>
 
       {/* 右侧：译文 PDF 或进度占位 */}
@@ -127,6 +153,9 @@ export default function BilingualView({
           translationProgress={translationProgress}
           page={page}
           scale={scale}
+          highlights={highlights}
+          hoveredId={hoveredId}
+          onHighlightClick={onHighlightClick}
         />
       </div>
     </div>

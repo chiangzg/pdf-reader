@@ -1,17 +1,23 @@
 import PdfPage from "./PdfPage";
 import { usePdfDocument } from "../hooks/usePdfDocument";
+import type { Highlight } from "../api/types";
 
 interface Props {
   fileUrl: string;
   page: number; // 1-based
   scale: number;
+  /** 本 PDF 所属侧：原文 / 译文（bilingual 下决定划词 variant） */
+  variant?: "original" | "translated";
+  highlights?: Highlight[];
+  hoveredId?: number | null;
+  onHighlightClick?: (h: Highlight) => void;
 }
 
 /**
  * 单页渲染壳（paged 模式用）：自行加载文档 + 渲染单页。
  * 实际渲染逻辑见 PdfPage；本组件负责文档生命周期与加载态。
  */
-export default function PdfCanvas({ fileUrl, page, scale }: Props) {
+export default function PdfCanvas({ fileUrl, page, scale, variant = "original", highlights, hoveredId, onHighlightClick }: Props) {
   const { doc, loading, error } = usePdfDocument(fileUrl);
 
   if (loading) {
@@ -51,5 +57,15 @@ export default function PdfCanvas({ fileUrl, page, scale }: Props) {
     );
   }
 
-  return <PdfPage doc={doc} pageNumber={page} scale={scale} />;
+  return (
+    <PdfPage
+      doc={doc}
+      pageNumber={page}
+      scale={scale}
+      variant={variant}
+      highlights={highlights}
+      hoveredId={hoveredId}
+      onHighlightClick={onHighlightClick}
+    />
+  );
 }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { useDevice } from "../hooks/useDevice";
 import BottomSheet from "./BottomSheet";
+import MarkdownLite from "./MarkdownLite";
 
 interface Props {
   /** 选中文本；为 null 时关闭 */
@@ -10,6 +11,8 @@ interface Props {
   /** PC 模式下浮窗定位锚点（选区 rect）；移动端忽略 */
   anchorRect?: DOMRect | null;
   onClose: () => void;
+  /** SSE 解读完成时回传累积全文，供调用方落库。参数为最终全文，空串表示无内容。 */
+  onDone?: (fullResult: string) => void;
 }
 
 /**
@@ -18,13 +21,18 @@ interface Props {
  * - 移动端：底部抽屉（下滑关闭）
  * 内容由 SSE 流式驱动，渲染逻辑完全复用。
  */
-export default function InterpretPanel({ text, context, anchorRect, onClose }: Props) {
+export default function InterpretPanel({ text, context, anchorRect, onClose, onDone }: Props) {
   const { isMobile } = useDevice();
   const [content, setContent] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const controllerRef = useRef<AbortController | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // interpretStream 的 done 回调可能被触发两次（SSE done 事件 + 流读完兜底），
+  // 用 ref 守卫，确保 onDone 只回传一次。
+  const doneFiredRef = useRef(false);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
 
   useEffect(() => {
     if (!text) {
@@ -36,6 +44,12 @@ export default function InterpretPanel({ text, context, anchorRect, onClose }: P
     setContent("");
     setStatus("loading");
     setErrorMsg("");
+    doneFiredRef.current = false;
+    const fireDone = (full: string) => {
+      if (doneFiredRef.current) return;
+      doneFiredRef.current = true;
+      onDoneRef.current?.(full);
+    };
     controllerRef.current = api.interpretStream(
       text,
       context,
@@ -51,10 +65,19 @@ export default function InterpretPanel({ text, context, anchorRect, onClose }: P
         setStatus("error");
         setErrorMsg(msg);
       },
-      () => setStatus((s) => (s === "loading" ? "done" : s))
+      () => {
+        setStatus((s) => (s === "loading" ? "done" : s));
+        fireDone(contentRef.current);
+      }
     );
     return () => controllerRef.current?.abort();
+    // content 通过 ref 读取最新值给 done 回调，避免把 content 放进依赖导致重复触发解读
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text, context]);
+
+  // 用 ref 持有最新 content，供 SSE done 回调读到累积全文
+  const contentRef = useRef("");
+  contentRef.current = content;
 
   const rendered = (
     <div ref={bodyRef} style={{ fontSize: 14, lineHeight: 1.8, color: "var(--fg)" }}>
@@ -132,30 +155,3 @@ const closeBtn: React.CSSProperties = {
   color: "var(--muted)",
 };
 
-/**
- * 极简 Markdown 渲染：支持 **加粗**、行内标记。
- * 不引入完整 markdown 库，保持轻量。
- */
-function MarkdownLite({ text }: { text: string }) {
-  const lines = text.split("\n");
-  return (
-    <>
-      {lines.map((line, i) => {
-        if (!line.trim()) return <div key={i} style={{ height: 8 }} />;
-        // 加粗 **xxx**
-        const parts = line.split(/(\*\*[^*]+\*\*)/g);
-        return (
-          <div key={i}>
-            {parts.map((p, j) =>
-              p.startsWith("**") && p.endsWith("**") ? (
-                <strong key={j}>{p.slice(2, -2)}</strong>
-              ) : (
-                <span key={j}>{p}</span>
-              )
-            )}
-          </div>
-        );
-      })}
-    </>
-  );
-}
