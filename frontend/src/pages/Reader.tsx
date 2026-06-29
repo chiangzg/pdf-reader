@@ -9,7 +9,7 @@ import PdfScroll from "../components/PdfScroll";
 import BilingualView from "../components/BilingualView";
 import TranslatedView from "../components/TranslatedView";
 import SelectionToolbar from "../components/SelectionToolbar";
-import InterpretPanel from "../components/InterpretPanel";
+import InterpretPanel, { type SessionInit } from "../components/InterpretPanel";
 import RightDrawer from "../components/RightDrawer";
 
 type Mode = "overlay" | "translated" | "bilingual";
@@ -55,19 +55,12 @@ export default function Reader() {
   // 翻页方式：左右翻页 / 上下滚动（全局偏好，存 localStorage）
   const [pageMode, setPageMode] = useState<PageMode>(readPageMode);
 
-  // 划词解读状态
+  // 划词解读会话状态
   const contentRef = useRef<HTMLDivElement>(null);
-  const [interpretText, setInterpretText] = useState<string | null>(null);
-  const [interpretRect, setInterpretRect] = useState<DOMRect | null>(null);
-  // 最近一次划词的选区信息（含 page/variant/normRects），解读完成后用于落库
-  const lastSelectionRef = useRef<{
-    page: number;
-    variant: "original" | "translated";
-    text: string;
-    normRects: { page: number; x: number; y: number; w: number; h: number }[];
-  } | null>(null);
+  const [sessionInit, setSessionInit] = useState<SessionInit | null>(null);
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
 
-  // 划词历史
+  // 划词历史（会话列表）
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [hoveredId, setHoveredId] = useState<number | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(readDrawerOpen);
@@ -201,40 +194,51 @@ export default function Reader() {
     }
   };
 
-  const handleInterpret = (text: string, rect: DOMRect) => {
-    // selection 来自 useSelection，已带 page/variant/normRects，落库时复用
-    if (selection) {
-      lastSelectionRef.current = {
-        page: selection.page,
-        variant: selection.variant,
-        text: selection.text,
-        normRects: selection.normRects,
-      };
-    }
-    setInterpretText(text);
-    setInterpretRect(rect);
-  };
-
-  const closeInterpret = () => {
-    setInterpretText(null);
-    setInterpretRect(null);
+  /** 新建解读：建首轮会话，触发 SSE 流式 */
+  const handleInterpret = (_text: string, rect: DOMRect) => {
+    if (!selection) return;
+    setAnchorRect(rect);
+    setSessionInit({
+      mode: "new",
+      text: selection.text,
+      variant: selection.variant,
+      coords: selection.normRects,
+    });
     clearSelection();
   };
 
-  /** SSE 解读完成 → 落库，成功后本地 unshift 新记录到抽屉顶部 */
-  const handleInterpretDone = async (fullResult: string) => {
-    const sel = lastSelectionRef.current;
-    if (!sel || !fullResult.trim()) return;
+  /** 续接既有会话：载入历史消息进入会话模式 */
+  const handleResume = (highlightId: number) => {
+    setAnchorRect(selection?.rect ?? null);
+    setSessionInit({ mode: "resume", highlightId });
+    clearSelection();
+  };
+
+  const closeSession = () => {
+    setSessionInit(null);
+    setAnchorRect(null);
+    clearSelection();
+  };
+
+  /** 首轮解读完成 → 落库（建会话头 + 首消息），成功返回新 highlight id，本地 unshift */
+  const handleCreateSession: (fullResult: string, info: {
+    variant: "original" | "translated";
+    text: string;
+    coords: { page: number; x: number; y: number; w: number; h: number }[];
+  }) => Promise<number | null> = async (fullResult, info) => {
+    if (!fullResult.trim()) return null;
     try {
       const created = await api.createHighlight(paperId, {
-        variant: sel.variant,
-        text: sel.text,
+        variant: info.variant,
+        text: info.text,
         result: fullResult,
-        coords: toHighlightCoords(sel.normRects),
+        coords: toHighlightCoords(info.coords),
       });
       setHighlights((hs) => [created, ...hs]);
+      return created.id;
     } catch {
-      /* 落库失败不影响用户已看到的解读 */
+      /* 落库失败不影响用户已看到的解读，但后续追问不可用（返回 null） */
+      return null;
     }
   };
 
@@ -256,10 +260,20 @@ export default function Reader() {
     }
   };
 
-  /** 点击正文中的下划线 → 打开抽屉并高亮对应记录 */
+  /** 点击正文中的下划线 → 打开该会话视图 */
   const handleHighlightClick = (h: Highlight) => {
     setHoveredId(h.id);
     if (!drawerOpen) changeDrawer(true);
+    // 同时打开会话面板（续接模式）
+    setAnchorRect(null);
+    setSessionInit({ mode: "resume", highlightId: h.id });
+  };
+
+  /** 点击抽屉会话项 → 打开会话视图 */
+  const handleOpenSession = (highlightId: number) => {
+    setHoveredId(highlightId);
+    setAnchorRect(null);
+    setSessionInit({ mode: "resume", highlightId });
   };
 
   if (loading) return <Center>加载中…</Center>;
@@ -370,17 +384,23 @@ export default function Reader() {
             onClose={() => changeDrawer(false)}
             onHover={setHoveredId}
             activeId={hoveredId}
+            onOpenSession={handleOpenSession}
             onDelete={handleDeleteHighlight}
           />
         )}
       </div>
 
-      <SelectionToolbar rect={selection?.rect ?? null} text={selection?.text ?? null} onInterpret={handleInterpret} />
+      <SelectionToolbar
+        selection={selection}
+        highlights={highlights}
+        onInterpret={handleInterpret}
+        onResume={handleResume}
+      />
       <InterpretPanel
-        text={interpretText}
-        anchorRect={interpretRect}
-        onClose={closeInterpret}
-        onDone={handleInterpretDone}
+        init={sessionInit}
+        anchorRect={anchorRect}
+        onClose={closeSession}
+        onCreateSession={handleCreateSession}
       />
     </div>
   );

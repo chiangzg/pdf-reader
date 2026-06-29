@@ -36,21 +36,32 @@ export interface HighlightCoord {
   h: number;
 }
 
-/** 划词 AI 解读历史记录 */
+/** 解读会话头（Highlight 即会话，解读内容存在 Message 表里） */
 export interface Highlight {
   id: number;
   paper_id: number;
   variant: "original" | "translated";
-  text: string;
-  result: string;
+  text: string; // 划词原文（会话主题）
   coords: HighlightCoord[];
   created_at: string;
+  message_count: number; // 会话消息数（含首轮 + 追问）
+  preview: string; // 末条 assistant 预览（截断），供抽屉扫读
 }
 
-/** 新建划词记录的请求体 */
+/** 新建会话的请求体：建会话头 + 首条 assistant 消息（组合接口） */
 export interface HighlightIn {
   variant: "original" | "translated";
   text: string;
-  result: string;
   coords: HighlightCoord[];
+  /** 首轮解读全文（落为首条 assistant 消息） */
+  result: string;
+}
+
+/** 会话中的一条消息（首轮解读或追问） */
+export interface Message {
+  id: number;
+  highlight_id: number;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
 }

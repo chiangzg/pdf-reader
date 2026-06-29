@@ -38,7 +38,7 @@ class Interpreter:
         self.model = settings.deepseek_model
 
     def stream(self, text: str, context: str | None = None) -> Generator[str, None, None]:
-        """流式生成解读文本（yield 增量字符串）。"""
+        """首轮解读：流式生成解读文本（yield 增量字符串）。"""
         user_content = f"请解读以下论文片段：\n\n{text}"
         if context:
             user_content += f"\n\n（上下文参考：{context[:500]}）"
@@ -49,6 +49,24 @@ class Interpreter:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ],
+            stream=True,
+            temperature=0.4,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                yield delta.content
+
+    def chat_stream(self, messages: list[dict]) -> Generator[str, None, None]:
+        """追问：接收外部拼好的 LLM messages 数组（system + 历史问答 + 新问题），流式返回。
+
+        与 stream() 的区别：不再自己拼 system/user，而是接收调用方组装好的完整上下文，
+        使多轮对话的上下文由路由层（取历史 Message + 截断）统一管理。
+        system 前缀固定含原文，命中 DeepSeek 上下文缓存以省钱。
+        """
+        stream = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
             stream=True,
             temperature=0.4,
         )

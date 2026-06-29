@@ -1,26 +1,26 @@
-import { useState } from "react";
 import type { Highlight } from "../api/types";
-import MarkdownLite from "./MarkdownLite";
 
 interface Props {
-  /** 全量划词记录（按 created_at 倒序） */
+  /** 全量会话（按 created_at 倒序） */
   highlights: Highlight[];
-  /** 当前页（1-based）—— 抽屉只列 coords 任一命中当前页的记录 */
+  /** 当前页（1-based）—— 抽屉只列 coords 任一命中当前页的会话 */
   currentPage: number;
   open: boolean;
   onClose: () => void;
   /** 抽屉项悬停联动：驱动正文叠加层对应记录加深 */
   onHover: (id: number | null) => void;
-  /** 点击下划线/列表项联动：从正文打开解读 */
+  /** 从正文下划线点击联动过来的高亮项 */
   activeId: number | null;
+  /** 点击会话项 → 打开会话视图（载入消息） */
+  onOpenSession: (highlightId: number) => void;
   onDelete?: (id: number) => void;
 }
 
 /**
- * 右侧辅助阅读抽屉（首期功能：划词 AI 解读历史）。
- * - 列表只展示「当前页」相关的记录（coords 任一命中当前页即展示，跨页记录在所涉各页都出现）。
+ * 右侧辅助阅读抽屉（首期功能：划词解读会话列表）。
+ * - 列表只展示「当前页」相关的会话（coords 任一命中当前页即展示，跨页会话在所涉各页都出现）。
  * - 鼠标悬停列表项 → onHover(id)，正文对应下划线加深。
- * - 点击列表项 → 展开该记录的 AI 解读全文。
+ * - 点击会话项 → 打开会话视图（载入该会话全部消息，可继续追问）。
  */
 export default function RightDrawer({
   highlights,
@@ -29,18 +29,13 @@ export default function RightDrawer({
   onClose,
   onHover,
   activeId,
+  onOpenSession,
   onDelete,
 }: Props) {
-  const [expandedId, setExpandedId] = useState<number | null>(null);
-
-  // 只列当前页相关记录（保持传入的倒序）
-  const items = highlights.filter((h) => h.coords.some((c) => c.page === currentPage));
-
-  const handleClick = (h: Highlight) => {
-    setExpandedId((cur) => (cur === h.id ? null : h.id));
-  };
-
   if (!open) return null;
+
+  // 只列当前页相关会话（保持传入的倒序）
+  const items = highlights.filter((h) => h.coords.some((c) => c.page === currentPage));
 
   return (
     <aside
@@ -66,7 +61,7 @@ export default function RightDrawer({
       >
         <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
           <strong style={{ fontSize: 14 }}>划词记录</strong>
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>第 {currentPage} 页 · {items.length} 条</span>
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>第 {currentPage} 页 · {items.length} 个会话</span>
         </div>
         <button onClick={onClose} style={closeBtn} title="收起">
           ✕
@@ -77,17 +72,18 @@ export default function RightDrawer({
         {items.length === 0 ? (
           <div style={{ padding: "32px 16px", textAlign: "center", color: "var(--muted)", fontSize: 13, lineHeight: 1.8 }}>
             当前页还没有划词记录
-            <div style={{ fontSize: 12, marginTop: 6 }}>在正文中选中词句，点「✨ AI 解读」即可记录</div>
+            <div style={{ fontSize: 12, marginTop: 6 }}>在正文中选中词句，点「✨ 新建解读」即可开始会话</div>
           </div>
         ) : (
           items.map((h) => {
-            const expanded = expandedId === h.id;
             const active = activeId === h.id;
+            const turns = Math.max(1, Math.ceil(h.message_count / 2));
             return (
               <div
                 key={h.id}
                 onMouseEnter={() => onHover(h.id)}
                 onMouseLeave={() => onHover(null)}
+                onClick={() => onOpenSession(h.id)}
                 style={{
                   margin: "0 8px 6px",
                   padding: "8px 10px",
@@ -97,7 +93,6 @@ export default function RightDrawer({
                   background: active ? "rgba(37,99,235,0.05)" : "#fafafa",
                   cursor: "pointer",
                 }}
-                onClick={() => handleClick(h)}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                   <span
@@ -111,6 +106,7 @@ export default function RightDrawer({
                   >
                     {h.variant === "translated" ? "译文" : "原文"}
                   </span>
+                  <span style={{ fontSize: 11, color: "var(--muted)" }}>{turns} 轮</span>
                   <span style={{ fontSize: 11, color: "var(--muted)" }}>{formatTime(h.created_at)}</span>
                   {onDelete && (
                     <button
@@ -119,7 +115,7 @@ export default function RightDrawer({
                         onDelete(h.id);
                       }}
                       style={delBtn}
-                      title="删除"
+                      title="删除会话"
                     >
                       删除
                     </button>
@@ -130,30 +126,29 @@ export default function RightDrawer({
                     fontSize: 13,
                     lineHeight: 1.5,
                     color: "var(--fg)",
+                    fontWeight: 500,
                     display: "-webkit-box",
-                    WebkitLineClamp: expanded ? "unset" : 2,
+                    WebkitLineClamp: 2,
                     WebkitBoxOrient: "vertical",
                     overflow: "hidden",
                   }}
                 >
                   {h.text}
                 </div>
-                {expanded && (
+                {h.preview && (
                   <div
                     style={{
-                      marginTop: 8,
-                      paddingTop: 8,
-                      borderTop: "1px dashed var(--border)",
-                      fontSize: 13,
-                      lineHeight: 1.8,
-                      color: "var(--fg)",
+                      fontSize: 12,
+                      color: "var(--muted)",
+                      marginTop: 4,
+                      display: "-webkit-box",
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden",
                     }}
                   >
-                    <MarkdownLite text={h.result} />
+                    {h.preview}
                   </div>
-                )}
-                {!expanded && (
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>点击查看 AI 解读</div>
                 )}
               </div>
             );

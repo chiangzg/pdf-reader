@@ -4,7 +4,8 @@
 - users          用户
 - papers         论文（按 source_hash 去重，归属用户；含翻译状态与译文 PDF 路径）
 - progress       阅读进度（user+paper 唯一）
-- highlights     划词 AI 解读记录（user+paper 多条，每次划词新增）
+- highlights     划词解读会话头（user+paper 多条，每次划词新增）
+- messages       解读会话的消息（首轮解读 + 追问，按会话 id 隔离上下文）
 
 翻译由独立的 pdf2zh 服务生成译文 PDF 文件，不再做段落级文本提取。
 """
@@ -86,12 +87,15 @@ class Progress(Base):
 
 
 class Highlight(Base):
-    """划词 AI 解读记录。
+    """划词解读「会话头」。
 
     每次划词解读都新增一条（不去重，按时间倒序展示历史）。
     coords 存 JSON 数组：[{page, x, y, w, h}, ...]，坐标为相对该页 viewport 的归一化值（0~1），
     抗缩放与翻页模式切换；每个矩形带 page，天然支持跨页记录展示。
     variant 区分原文/译文侧（bilingual 双语对照下两侧都能划）。
+
+    会话化设计：Highlight 是会话头（持有原文/坐标/页/variant），
+    解读内容（首轮 + 追问）全部存在 Message 表里，用 highlight.id 作 session id 隔离上下文。
     """
 
     __tablename__ = "highlights"
@@ -100,12 +104,35 @@ class Highlight(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     paper_id: Mapped[int] = mapped_column(ForeignKey("papers.id", ondelete="CASCADE"), index=True, nullable=False)
     variant: Mapped[str] = mapped_column(String(16), nullable=False, comment="original / translated")
-    text: Mapped[str] = mapped_column(Text(), nullable=False, comment="划词原文")
-    result: Mapped[str] = mapped_column(Text(), nullable=False, comment="AI 解读全文")
+    text: Mapped[str] = mapped_column(Text(), nullable=False, comment="划词原文（会话主题）")
     coords: Mapped[str] = mapped_column(Text(), nullable=False, comment="JSON: [{page,x,y,w,h}, ...] 归一化 0~1")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
+    messages: Mapped[list["Message"]] = relationship(back_populates="highlight", cascade="all, delete-orphan")
     paper: Mapped["Paper"] = relationship()
     user: Mapped["User"] = relationship()
 
     __table_args__ = (Index("ix_highlights_user_paper", "user_id", "paper_id"),)
+
+
+class Message(Base):
+    """解读会话中的一条消息（首轮解读或追问）。
+
+    首轮解读 = 该会话 id 下 role=assistant 的第一条消息；
+    追问 = user 消息 + 流式返回的 assistant 消息。
+    按 (highlight_id, created_at) 升序载入即可重建完整对话上下文。
+    """
+
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    highlight_id: Mapped[int] = mapped_column(
+        ForeignKey("highlights.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False, comment="user / assistant")
+    content: Mapped[str] = mapped_column(Text(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    highlight: Mapped["Highlight"] = relationship(back_populates="messages")
+
+    __table_args__ = (UniqueConstraint("highlight_id", "created_at", name="uq_message_highlight_time"),)

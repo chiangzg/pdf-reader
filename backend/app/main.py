@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import Base, engine
-from app.routers import auth, highlights, interpret, papers, progress
+from app.routers import auth, chat, highlights, interpret, papers, progress
 
 settings = get_settings()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -57,3 +57,4 @@ app.include_router(papers.router, prefix="/api/papers", tags=["papers"])
 app.include_router(interpret.router, prefix="/api", tags=["interpret"])
 app.include_router(progress.router, prefix="/api/progress", tags=["progress"])
 app.include_router(highlights.router, prefix="/api/highlights", tags=["highlights"])
+app.include_router(chat.router, prefix="/api/highlights", tags=["chat"])

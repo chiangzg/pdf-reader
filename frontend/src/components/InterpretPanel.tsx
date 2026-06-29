@@ -1,120 +1,304 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import type { Message } from "../api/types";
 import { useDevice } from "../hooks/useDevice";
 import BottomSheet from "./BottomSheet";
 import MarkdownLite from "./MarkdownLite";
 
+export interface NewSessionInit {
+  /** 首轮模式：新建会话，触发首轮解读流式 */
+  mode: "new";
+  text: string;
+  variant: "original" | "translated";
+  /** 归一化坐标，落库时用 */
+  coords: { page: number; x: number; y: number; w: number; h: number }[];
+}
+
+export interface ResumeSessionInit {
+  /** 续接模式：载入既有会话历史，可继续追问 */
+  mode: "resume";
+  highlightId: number;
+}
+
+export type SessionInit = NewSessionInit | ResumeSessionInit;
+
 interface Props {
-  /** 选中文本；为 null 时关闭 */
-  text: string | null;
-  context?: string;
-  /** PC 模式下浮窗定位锚点（选区 rect）；移动端忽略 */
+  /** 会话初始化描述；null 时关闭面板 */
+  init: SessionInit | null;
+  /** PC 模式下浮窗定位锚点（首轮选区 rect） */
   anchorRect?: DOMRect | null;
   onClose: () => void;
-  /** SSE 解读完成时回传累积全文，供调用方落库。参数为最终全文，空串表示无内容。 */
-  onDone?: (fullResult: string) => void;
+  /** 首轮解读完成 → 落库（建会话头 + 首消息）。返回新建的 highlight。 */
+  onCreateSession: (fullResult: string, info: {
+    variant: "original" | "translated";
+    text: string;
+    coords: { page: number; x: number; y: number; w: number; h: number }[];
+  }) => Promise<number | null>;
 }
 
 /**
- * 解读结果面板：
- * - PC：选区附近的浮空 popover
+ * 解读会话面板：
+ * - PC：选区附近的浮空 popover（多轮对话窗口）
  * - 移动端：底部抽屉（下滑关闭）
- * 内容由 SSE 流式驱动，渲染逻辑完全复用。
+ *
+ * 两种初始化模式：
+ *  - new：首轮解读，SSE 流式 → 首条 assistant 消息 → done 后落库拿 sessionId
+ *  - resume：续接，先载入历史 messages，底部输入框追问
+ *
+ * 追问：append user → chatStream(sessionId) → 流入 assistant。
  */
-export default function InterpretPanel({ text, context, anchorRect, onClose, onDone }: Props) {
+export default function InterpretPanel({ init, anchorRect, onClose, onCreateSession }: Props) {
   const { isMobile } = useDevice();
-  const [content, setContent] = useState("");
-  const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
-  const [errorMsg, setErrorMsg] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  // 本地未落库的临时 id（负数，避免与后端 id 冲突）
+  const localSeq = useRef(-1);
+  const [streamingId, setStreamingId] = useState<number | null>(null);
+  const [input, setInput] = useState("");
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [loadingAnswer, setLoadingAnswer] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
-  // interpretStream 的 done 回调可能被触发两次（SSE done 事件 + 流读完兜底），
-  // 用 ref 守卫，确保 onDone 只回传一次。
-  const doneFiredRef = useRef(false);
-  const onDoneRef = useRef(onDone);
-  onDoneRef.current = onDone;
+  const initRef = useRef(init);
+  initRef.current = init;
 
+  // 追问/首轮后落库拿到的 sessionId（resume 模式下即 init.highlightId）
+  const sessionIdRef = useRef<number | null>(null);
+  const variantRef = useRef<"original" | "translated">("original");
+  const coordsRef = useRef<{ page: number; x: number; y: number; w: number; h: number }[]>([]);
+
+  const scrollToBottom = () => {
+    requestAnimationFrame(() => {
+      if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    });
+  };
+
+  // init 变化：重置并按模式启动
   useEffect(() => {
-    if (!text) {
-      setContent("");
-      setStatus("idle");
+    const cur = initRef.current;
+    if (!cur) {
+      setMessages([]);
+      sessionIdRef.current = null;
       return;
     }
-    // 触发解读
-    setContent("");
-    setStatus("loading");
-    setErrorMsg("");
-    doneFiredRef.current = false;
-    const fireDone = (full: string) => {
-      if (doneFiredRef.current) return;
-      doneFiredRef.current = true;
-      onDoneRef.current?.(full);
-    };
+    controllerRef.current?.abort();
+    setMessages([]);
+
+    if (cur.mode === "resume") {
+      sessionIdRef.current = cur.highlightId;
+      setLoadingHistory(true);
+      api
+        .listMessages(cur.highlightId)
+        .then((msgs) => {
+          setMessages(msgs);
+          scrollToBottom();
+        })
+        .catch(() => {
+          /* 载入失败则空会话 */
+        })
+        .finally(() => setLoadingHistory(false));
+      return;
+    }
+
+    // new 模式：首轮解读
+    sessionIdRef.current = null;
+    variantRef.current = cur.variant;
+    coordsRef.current = cur.coords;
+    const tempId = localSeq.current--;
+    // 占位 assistant 消息，流式填充
+    setMessages([{ id: tempId, highlight_id: -1, role: "assistant", content: "", created_at: new Date().toISOString() }]);
+    setStreamingId(tempId);
+    let doneFired = false;
     controllerRef.current = api.interpretStream(
-      text,
-      context,
+      cur.text,
+      undefined,
       (delta) => {
-        setStatus((s) => (s === "loading" ? "loading" : s));
-        setContent((c) => c + delta);
-        // 自动滚到底
-        requestAnimationFrame(() => {
-          if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
-        });
-      },
-      (msg) => {
-        setStatus("error");
-        setErrorMsg(msg);
+        setMessages((ms) =>
+          ms.map((m) => (m.id === tempId ? { ...m, content: m.content + delta } : m))
+        );
+        scrollToBottom();
       },
       () => {
-        setStatus((s) => (s === "loading" ? "done" : s));
-        fireDone(contentRef.current);
+        // error：把占位消息标记为失败（保留已流入部分）
+        setStreamingId(null);
+      },
+      async () => {
+        if (doneFired) return;
+        doneFired = true;
+        setStreamingId(null);
+        // 取最终全文
+        const full = initAccumRef.current;
+        if (!full.trim()) return;
+        const id = await onCreateSession(full, {
+          variant: cur.variant,
+          text: cur.text,
+          coords: cur.coords,
+        });
+        if (id != null) sessionIdRef.current = id;
       }
     );
-    return () => controllerRef.current?.abort();
-    // content 通过 ref 读取最新值给 done 回调，避免把 content 放进依赖导致重复触发解读
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, context]);
+  }, [init]);
 
-  // 用 ref 持有最新 content，供 SSE done 回调读到累积全文
-  const contentRef = useRef("");
-  contentRef.current = content;
+  // 用 ref 持有最新首轮全文供 done 回调读取
+  const initAccumRef = useRef("");
+  useEffect(() => {
+    const first = messages.find((m) => m.role === "assistant");
+    initAccumRef.current = first?.content ?? "";
+  }, [messages]);
+
+  // 追问发送
+  const sendQuestion = () => {
+    const q = input.trim();
+    const sid = sessionIdRef.current;
+    if (!q || loadingAnswer || loadingHistory || streamingId != null) return;
+    if (sid == null) return; // 首轮未落库完成前不允许追问
+
+    const userMsg: Message = {
+      id: localSeq.current--,
+      highlight_id: sid,
+      role: "user",
+      content: q,
+      created_at: new Date().toISOString(),
+    };
+    const aTempId = localSeq.current--;
+    const aMsg: Message = {
+      id: aTempId,
+      highlight_id: sid,
+      role: "assistant",
+      content: "",
+      created_at: new Date().toISOString(),
+    };
+    setMessages((ms) => [...ms, userMsg, aMsg]);
+    setInput("");
+    setStreamingId(aTempId);
+    setLoadingAnswer(true);
+
+    controllerRef.current = api.chatStream(
+      sid,
+      q,
+      (delta) => {
+        setMessages((ms) =>
+          ms.map((m) => (m.id === aTempId ? { ...m, content: m.content + delta } : m))
+        );
+        scrollToBottom();
+      },
+      () => {
+        setStreamingId(null);
+        setLoadingAnswer(false);
+      },
+      () => {
+        setStreamingId(null);
+        setLoadingAnswer(false);
+      }
+    );
+  };
+
+  useEffect(() => () => controllerRef.current?.abort(), []);
 
   const rendered = (
-    <div ref={bodyRef} style={{ fontSize: 14, lineHeight: 1.8, color: "var(--fg)" }}>
-      {status === "error" ? (
-        <div style={{ color: "#dc2626" }}>解读失败：{errorMsg}</div>
-      ) : !content && status === "loading" ? (
+    <div
+      ref={bodyRef}
+      style={{
+        fontSize: 14,
+        lineHeight: 1.8,
+        color: "var(--fg)",
+        flex: 1,
+        minHeight: 0,
+        overflowY: "auto",
+      }}
+    >
+      {loadingHistory && messages.length === 0 ? (
+        <span style={{ color: "var(--muted)" }}>载入会话…</span>
+      ) : messages.length === 0 ? (
         <span style={{ color: "var(--muted)" }}>正在解读…</span>
       ) : (
-        <MarkdownLite text={content} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {messages.map((m) => (
+            <MessageBubble key={m.id} role={m.role} streaming={streamingId === m.id}>
+              {m.role === "assistant" ? <MarkdownLite text={m.content} /> : m.content}
+            </MessageBubble>
+          ))}
+        </div>
       )}
-      {status === "loading" && content && <span className="cursor-blink">▍</span>}
+    </div>
+  );
+
+  const footer = (
+    <div style={{ display: "flex", gap: 8, paddingTop: 8 }}>
+      <input
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            sendQuestion();
+          }
+        }}
+        placeholder={sessionIdRef.current == null ? "解读完成后可追问…" : "追问…（Enter 发送）"}
+        disabled={sessionIdRef.current == null || loadingAnswer || streamingId != null}
+        style={{
+          flex: 1,
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          padding: "8px 10px",
+          fontSize: 13,
+          outline: "none",
+          background: "#fff",
+          color: "var(--fg)",
+        }}
+      />
+      <button
+        onClick={sendQuestion}
+        disabled={sessionIdRef.current == null || loadingAnswer || streamingId != null || !input.trim()}
+        style={{
+          background: "var(--primary)",
+          color: "#fff",
+          border: "none",
+          borderRadius: 6,
+          padding: "0 14px",
+          cursor: "pointer",
+          fontSize: 13,
+          opacity: sessionIdRef.current == null || loadingAnswer ? 0.5 : 1,
+        }}
+      >
+        发送
+      </button>
     </div>
   );
 
   if (isMobile) {
     return (
-      <BottomSheet open={!!text} onClose={onClose} heightRatio={0.6}>
+      <BottomSheet open={init != null} onClose={onClose} heightRatio={0.7}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <strong style={{ fontSize: 15 }}>AI 解读</strong>
           <button onClick={onClose} style={closeBtn}>关闭</button>
         </div>
-        {rendered}
+        <div style={{ display: "flex", flexDirection: "column", height: "80%" }}>
+          {rendered}
+          {footer}
+        </div>
       </BottomSheet>
     );
   }
 
   // PC popover
-  if (!text || !anchorRect) return null;
-  // 定位：尽量在选区下方，空间不足则上方
+  if (!init) return null;
+  const panelMaxH = 420;
+  const panelW = 460;
   const margin = 10;
-  const panelMaxH = 360;
-  const placeBelow = window.innerHeight - anchorRect.bottom > panelMaxH + 40;
-  const top = placeBelow ? anchorRect.bottom + margin : Math.max(8, anchorRect.top - panelMaxH - margin);
-  // 水平：居中于选区，但限制在视口内
-  const panelW = 420;
-  const center = anchorRect.left + anchorRect.width / 2;
-  let left = center - panelW / 2;
+  let top: number;
+  let left: number;
+  if (anchorRect) {
+    // 有选区锚点：贴选区下方/上方
+    const placeBelow = window.innerHeight - anchorRect.bottom > panelMaxH + 40;
+    top = placeBelow ? anchorRect.bottom + margin : Math.max(8, anchorRect.top - panelMaxH - margin);
+    const center = anchorRect.left + anchorRect.width / 2;
+    left = center - panelW / 2;
+  } else {
+    // 无锚点（续接/抽屉点击打开）：屏幕居中
+    top = Math.max(8, (window.innerHeight - panelMaxH) / 2);
+    left = (window.innerWidth - panelW) / 2;
+  }
   left = Math.max(8, Math.min(left, window.innerWidth - panelW - 8));
 
   return (
@@ -125,7 +309,7 @@ export default function InterpretPanel({ text, context, anchorRect, onClose, onD
         top,
         width: panelW,
         maxWidth: "calc(100vw - 16px)",
-        maxHeight: panelMaxH,
+        height: panelMaxH,
         background: "#fff",
         border: "1px solid var(--border)",
         borderRadius: 12,
@@ -140,7 +324,39 @@ export default function InterpretPanel({ text, context, anchorRect, onClose, onD
         <strong style={{ fontSize: 14 }}>AI 解读</strong>
         <button onClick={onClose} style={closeBtn}>关闭</button>
       </div>
-      <div style={{ padding: 14, overflow: "auto", flex: 1 }}>{rendered}</div>
+      <div style={{ padding: "0 14px 14px", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        {rendered}
+        {footer}
+      </div>
+    </div>
+  );
+}
+
+function MessageBubble({
+  role,
+  streaming,
+  children,
+}: {
+  role: string;
+  streaming: boolean;
+  children: React.ReactNode;
+}) {
+  const isUser = role === "user";
+  return (
+    <div style={{ alignSelf: isUser ? "flex-end" : "flex-start", maxWidth: "88%" }}>
+      <div
+        style={{
+          background: isUser ? "var(--primary)" : "#f3f4f6",
+          color: isUser ? "#fff" : "var(--fg)",
+          borderRadius: 10,
+          padding: "8px 12px",
+          fontSize: 13,
+          lineHeight: 1.7,
+        }}
+      >
+        {children}
+        {streaming && <span className="cursor-blink">▍</span>}
+      </div>
     </div>
   );
 }
@@ -154,4 +370,3 @@ const closeBtn: React.CSSProperties = {
   fontSize: 12,
   color: "var(--muted)",
 };
-

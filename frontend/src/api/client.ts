@@ -1,4 +1,4 @@
-import type { Highlight, HighlightIn, PaperDetail, PaperListOut, TranslationStatusOut } from "./types";
+import type { Highlight, HighlightIn, Message, PaperDetail, PaperListOut, TranslationStatusOut } from "./types";
 
 const BASE = "/api";
 
@@ -219,5 +219,72 @@ export const api = {
   async deleteHighlight(highlightId: number): Promise<void> {
     const res = await afetch(`${BASE}/highlights/${highlightId}`, { method: "DELETE" });
     if (!res.ok) throw new Error("删除失败");
+  },
+
+  /** 载入某会话全部消息（首轮解读 + 追问），按时间升序，用于重建对话上下文 */
+  async listMessages(highlightId: number): Promise<Message[]> {
+    const res = await afetch(`${BASE}/highlights/${highlightId}/messages`);
+    return jsonOrThrow(res);
+  },
+
+  /** 追问：SSE 流式，事件协议同 interpretStream（delta/error/done） */
+  chatStream(
+    highlightId: number,
+    question: string,
+    onDelta: (delta: string) => void,
+    onError: (msg: string) => void,
+    onDone: () => void
+  ): AbortController {
+    const controller = new AbortController();
+    fetch(`${BASE}/highlights/${highlightId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+      signal: controller.signal,
+      credentials: "include",
+    })
+      .then(async (res) => {
+        if (!res.ok || !res.body) {
+          onError(`请求失败 (${res.status})`);
+          return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let curEvent = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) {
+              curEvent = "";
+              continue;
+            }
+            if (trimmed.startsWith("event:")) {
+              curEvent = trimmed.slice(6).trim();
+            } else if (trimmed.startsWith("data:")) {
+              const raw = trimmed.slice(5).trim();
+              let payload = raw;
+              try {
+                payload = JSON.parse(raw);
+              } catch {
+                /* 非 JSON 直接用原文 */
+              }
+              if (curEvent === "delta") onDelta(String(payload));
+              else if (curEvent === "error") onError(String(payload));
+              else if (curEvent === "done") onDone();
+            }
+          }
+        }
+        onDone();
+      })
+      .catch((e) => {
+        if (e?.name !== "AbortError") onError(e?.message || "网络错误");
+      });
+    return controller;
   },
 };
