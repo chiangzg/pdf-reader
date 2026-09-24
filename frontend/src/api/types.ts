@@ -4,6 +4,7 @@ export interface PaperOut {
   id: number;
   title: string;
   filename: string;
+  source_hash: string;
   total_pages: number;
   created_at: string;
   translation_status: string; // pending / running / done / failed

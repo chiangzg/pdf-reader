@@ -8,6 +8,7 @@ class PaperOut(BaseModel):
     id: int
     title: str
     filename: str
+    source_hash: str
     total_pages: int
     created_at: datetime
     translation_status: str = "pending"
