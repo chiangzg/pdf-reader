@@ -9,7 +9,7 @@ psycopg2-binary==2.9.10
 alembic==1.14.0
 
 # pdf2zh 翻译服务客户端
-gradio_client==1.5.4
+gradio_client==2.7.1
 
 # PDF 元信息（页数/标题，轻量，无需 PyMuPDF）
 pypdf==5.1.0
