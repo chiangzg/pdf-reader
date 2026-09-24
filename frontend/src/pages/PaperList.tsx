@@ -197,8 +197,12 @@ function PaperCard({ paper, onOpen, onDelete }: { paper: PaperOut; onOpen: () =>
           {paper.title}
         </div>
         <div style={{ fontSize: 12, color: "var(--muted)", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }} title={paper.filename}>
+            {paper.filename}
+          </span>
           <span>{paper.total_pages} 页</span>
           <span style={{ color: si.color }}>● {si.text}</span>
+          <HashBadge hash={paper.source_hash} />
           <span>{new Date(paper.created_at).toLocaleDateString()}</span>
         </div>
       </div>
@@ -206,6 +210,74 @@ function PaperCard({ paper, onOpen, onDelete }: { paper: PaperOut; onOpen: () =>
         删除
       </button>
     </div>
+  );
+}
+
+/** SHA256 hash 徽章：默认只显示截断片段，hover 弹出完整值，点击复制。 */
+function HashBadge({ hash }: { hash: string }) {
+  const [hovered, setHovered] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const short = `${hash.slice(0, 8)}…${hash.slice(-6)}`;
+  const onCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(hash);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // 剪贴板不可用时静默失败（非关键路径）
+    }
+  };
+  return (
+    <span
+      style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <span
+        onClick={onCopy}
+        title="点击复制完整 SHA256"
+        style={{
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontSize: 11,
+          color: "var(--muted)",
+          background: "var(--bg)",
+          border: "1px solid var(--border)",
+          borderRadius: 4,
+          padding: "1px 6px",
+          cursor: "pointer",
+          userSelect: "none",
+        }}
+      >
+        {short}
+      </span>
+      {/* hover tooltip：显示完整 hash 或复制成功提示 */}
+      {hovered && (
+        <span
+          style={{
+            position: "absolute",
+            bottom: "140%",
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#1f2329",
+            color: "#fff",
+            fontSize: 11,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            padding: "6px 10px",
+            borderRadius: 6,
+            whiteSpace: "nowrap",
+            maxWidth: 360,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            pointerEvents: "none",
+            zIndex: 10,
+            boxShadow: "0 4px 12px rgba(0,0,0,.15)",
+          }}
+        >
+          {copied ? "✓ 已复制到剪贴板" : hash}
+        </span>
+      )}
+    </span>
   );
 }
 
