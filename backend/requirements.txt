@@ -15,7 +15,7 @@ gradio_client==1.5.4
 pypdf==5.1.0
 
 # DeepSeek（interpreter.py 用于 AI 解读）
-openai==1.58.1
+openai==3.16.2
 
 # 工具
 pydantic==2.10.4
