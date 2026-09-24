@@ -63,7 +63,7 @@ export default function PaperList() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 12, flexWrap: "wrap" }}>
         <h1 style={{ fontSize: 22, margin: 0 }}>PDF 翻译阅读器</h1>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 13, color: "var(--muted)" }}>{user?.email}</span>
+          <span style={{ fontSize: 13, color: "var(--muted)" }}>{user?.name || user?.email}</span>
           <button
             onClick={async () => {
               await logout();

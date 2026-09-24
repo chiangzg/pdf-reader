@@ -1,26 +1,16 @@
-"""认证工具：密码哈希、JWT 签发与校验。"""
+"""认证工具：内部会话 JWT 的签发与校验。
+
+OIDC（Authentik）只负责登录时刻的身份引导；登录成功后仍签发本地 JWT
+写入 httpOnly cookie，下游接口（get_current_user）只认这个内部 token。
+密码哈希相关函数已随密码登录一并移除。
+"""
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import bcrypt
 import jwt
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 天
-
-
-def hash_password(password: str) -> str:
-    # bcrypt 限制 72 字节，截断避免报错
-    pw = password.encode("utf-8")[:72]
-    return bcrypt.hashpw(pw, bcrypt.gensalt()).decode("utf-8")
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    try:
-        pw = plain.encode("utf-8")[:72]
-        return bcrypt.checkpw(pw, hashed.encode("utf-8"))
-    except (ValueError, TypeError):
-        return False
 
 
 def create_access_token(

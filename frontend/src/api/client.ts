@@ -18,7 +18,14 @@ async function afetch(input: string, init: RequestInit = {}): Promise<Response> 
 export interface UserOut {
   id: number;
   email: string;
+  name: string | null;
   created_at: string;
+}
+
+export interface LogoutOut {
+  detail: string;
+  /** Authentik 全局登出地址，非空时前端应整页跳转过去 */
+  logout_url: string | null;
 }
 
 export interface ProgressOut {
@@ -30,27 +37,10 @@ export interface ProgressOut {
 }
 
 export const api = {
-  // ===== 认证 =====
-  async register(email: string, password: string): Promise<UserOut> {
-    const res = await afetch(`${BASE}/auth/register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
+  // ===== 认证（OIDC 由后端驱动，登录入口为整页跳转 /api/auth/oidc/login）=====
+  async logout(): Promise<LogoutOut> {
+    const res = await afetch(`${BASE}/auth/logout`, { method: "POST" });
     return jsonOrThrow(res);
-  },
-
-  async login(email: string, password: string): Promise<UserOut> {
-    const res = await afetch(`${BASE}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    return jsonOrThrow(res);
-  },
-
-  async logout(): Promise<void> {
-    await afetch(`${BASE}/auth/logout`, { method: "POST" });
   },
 
   async me(): Promise<UserOut | null> {

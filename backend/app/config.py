@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
 
+    # ---- OIDC（Authentik）----
+    # issuer 形如 https://auth.example.com/application/o/pdf-reader/
+    # 留空表示未启用 OIDC，应用可正常启动，登录接口返回 503
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    # 对外基址（如 https://your-domain），用于拼回调/登出跳转地址；
+    # 留空则从请求头推导。生产在反向代理后面时建议显式填写，
+    # 因为 Authentik 要求回调地址与登记值完全一致。
+    oidc_redirect_base: str = ""
+
     # ---- 上传 ----
     max_upload_mb: int = 50
 
