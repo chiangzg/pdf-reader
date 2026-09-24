@@ -2,11 +2,14 @@
 FROM python:3.11-slim AS base
 
 # 设置时区与编码
+# FORWARDED_ALLOW_IPS=*：gunicorn/uvicorn worker 信任内网代理（Traefik/nginx）的
+# X-Forwarded-* 头，使 OIDC 回调地址、secure cookie 的 scheme 判断正确
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     TZ=Asia/Shanghai \
-    LANG=C.UTF-8
+    LANG=C.UTF-8 \
+    FORWARDED_ALLOW_IPS=*
 
 WORKDIR /app
 

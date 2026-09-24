@@ -19,10 +19,12 @@ openai==1.58.1
 
 # 工具
 pydantic==2.10.4
-email-validator==2.2.0
 pydantic-settings==2.7.0
 python-multipart==0.0.20
-bcrypt==4.2.1
 PyJWT==2.10.1
 httpx==0.28.1
 tenacity==9.0.0
+
+# OIDC 登录（Authentik 等）
+authlib==1.6.1
+itsdangerous==2.2.0

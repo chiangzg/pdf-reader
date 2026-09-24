@@ -27,7 +27,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
-    await api.logout();
+    const { logout_url } = await api.logout();
+    if (logout_url) {
+      // 跳转 Authentik 全局登出，登出后由 Authentik 带回 /login
+      window.location.href = logout_url;
+      return;
+    }
     setUser(null);
   }, []);
 

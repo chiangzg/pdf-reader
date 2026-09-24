@@ -33,7 +33,11 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # OIDC 登录后本地不再存密码，仅历史密码用户保留（已无法用于登录）
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Authentik 的稳定用户标识（sub claim），首次登录时按 email 自动关联老账号
+    oidc_sub: Mapped[str | None] = mapped_column(String(255), unique=True, index=True, nullable=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="展示名，来自 Authentik profile")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
