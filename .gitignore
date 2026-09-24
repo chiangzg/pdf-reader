@@ -46,3 +46,7 @@ backend/uploads/
 # ===== Traefik 动态文件 =====
 proxy/acme.json
 proxy/acme-test.json
+
+# ===== 本地 agent 工具目录（勿提交）=====
+.zcode/
+.video_agent/
